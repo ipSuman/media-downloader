@@ -21,7 +21,6 @@ android {
         release {
             isMinifyEnabled = false
         }
-
         debug {
             isMinifyEnabled = false
         }
@@ -38,10 +37,20 @@ android {
 
     sourceSets {
         getByName("main") {
-            assets.srcDir(
-                rootProject.projectDir
-            )
+            assets.srcDir(layout.buildDirectory.dir("generated/assets"))
         }
+    }
+}
+
+val copyWebApp by tasks.registering(Copy::class) {
+    from(rootProject.file("index.html"))
+    into(layout.buildDirectory.dir("generated/assets"))
+}
+
+android.applicationVariants.all {
+    val variantName = name.replaceFirstChar { it.uppercase() }
+    tasks.named("merge${variantName}Assets").configure {
+        dependsOn(copyWebApp)
     }
 }
 
