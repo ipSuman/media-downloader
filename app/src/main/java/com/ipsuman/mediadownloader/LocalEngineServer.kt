@@ -4,9 +4,26 @@ import fi.iki.elonen.NanoHTTPD
 
 class LocalEngineServer : NanoHTTPD(8765) {
 
+    private fun cors(response: Response): Response {
+        response.addHeader("Access-Control-Allow-Origin", "*")
+        response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        response.addHeader("Access-Control-Allow-Headers", "Content-Type")
+        return response
+    }
+
     override fun serve(session: IHTTPSession): Response {
 
-        return when {
+        if (session.method == Method.OPTIONS) {
+            return cors(
+                newFixedLengthResponse(
+                    Response.Status.OK,
+                    "text/plain",
+                    ""
+                )
+            )
+        }
+
+        val response = when {
             session.method == Method.GET &&
                 session.uri == "/api/status" -> {
 
@@ -54,5 +71,7 @@ class LocalEngineServer : NanoHTTPD(8765) {
                 )
             }
         }
+
+        return cors(response)
     }
 }
