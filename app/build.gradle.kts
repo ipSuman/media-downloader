@@ -49,6 +49,10 @@ android {
 chaquopy {
     defaultConfig {
         version = "3.11"
+
+        pip {
+            install("-r", "src/main/python/requirements.txt")
+        }
     }
 }
 
