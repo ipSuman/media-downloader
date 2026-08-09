@@ -9,6 +9,7 @@
         android:allowBackup="true"
         android:label="Media Downloader"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.MediaDownloader">
 
         <activity
