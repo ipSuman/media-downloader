@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+import org.gradle.api.tasks.Copy
+
 android {
     namespace = "com.ipsuman.mediadownloader"
     compileSdk = 35
@@ -39,4 +41,16 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.webkit:webkit:1.12.1")
+}
+
+tasks.register<Copy>("copyWebApp") {
+    from(rootProject.file("index.html"))
+    into(layout.buildDirectory.dir("generated/assets/index"))
+}
+
+android.applicationVariants.all {
+    val variantName = name
+    tasks.named("pre${variantName.replaceFirstChar { it.uppercase() }}Build") {
+        dependsOn("copyWebApp")
+    }
 }
