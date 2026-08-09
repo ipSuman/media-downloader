@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101416">
+<title>Media Downloader</title>
+
+<style>
+:root{
+  --bg:#0d1113;
+  --card:#151b1e;
+  --card2:#1b2226;
+  --text:#f3f7f8;
+  --muted:#9ba9ae;
+  --accent:#35c7b5;
+  --accent-dark:#219d8e;
+  --orange:#f39a45;
+  --red:#ef6262;
+  --border:#293338;
+  --radius:18px;
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+
+button,input,select,textarea{
+  font:inherit;
+}
+
+button{
+  cursor:pointer;
+}
+
+.app{
+  width:min(100%,760px);
+  margin:auto;
+  padding:18px 14px 40px;
+}
+
+/* HEADER */
+
+.header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom:20px;
+}
+
+.logo{
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+
+.logo-icon{
+  width:46px;
+  height:46px;
+  border-radius:14px;
+  display:grid;
+  place-items:center;
+  background:var(--accent);
+  color:#071312;
+  font-size:23px;
+  font-weight:900;
+}
+
+h1{
+  margin:0;
+  font-size:22px;
+  line-height:1.1;
+}
+
+.subtitle{
+  color:var(--muted);
+  font-size:12px;
+  margin-top:4px;
+}
+
+.settings{
+  width:42px;
+  height:42px;
+  border:1px solid var(--border);
+  background:var(--card);
+  color:var(--text);
+  border-radius:13px;
+  font-size:20px;
+}
+
+/* CARDS */
+
+.card{
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:17px;
+  margin-bottom:14px;
+}
+
+.card-title{
+  font-size:16px;
+  font-weight:800;
+  margin-bottom:13px;
+}
+
+label{
+  display:block;
+  color:var(--muted);
+  font-size:12px;
+  font-weight:700;
+  margin-bottom:7px;
+}
+
+/* URL */
+
+.url-box{
+  display:flex;
+  gap:8px;
+}
+
+input,select,textarea{
+  width:100%;
+  color:var(--text);
+  background:var(--card2);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:12px;
+  outline:none;
+}
+
+input:focus,select:focus,textarea:focus{
+  border-color:var(--accent);
+}
+
+.paste{
+  flex:0 0 auto;
+  padding:0 14px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:var(--card2);
+  color:var(--text);
+}
+
+.primary{
+  width:100%;
+  margin-top:11px;
+  padding:13px;
+  border:0;
+  border-radius:13px;
+  background:var(--accent);
+  color:#061311;
+  font-weight:900;
+}
+
+.primary:active{
+  transform:scale(.99);
+}
+
+.status{
+  color:var(--muted);
+  text-align:center;
+  font-size:12px;
+  margin:12px 0 0;
+}
+
+/* MEDIA INFO */
+
+.media{
+  display:none;
+}
+
+.media.show{
+  display:block;
+}
+
+.media-info{
+  display:flex;
+  gap:13px;
+}
+
+.thumbnail{
+  width:105px;
+  height:68px;
+  flex:0 0 105px;
+  border-radius:11px;
+  background:#202a2e;
+  display:grid;
+  place-items:center;
+  font-size:25px;
+}
+
+.media-title{
+  font-size:15px;
+  font-weight:800;
+  margin:0 0 5px;
+}
+
+.media-meta{
+  color:var(--muted);
+  font-size:12px;
+}
+
+/* FORMAT */
+
+.table-wrap{
+  overflow-x:auto;
+  border:1px solid var(--border);
+  border-radius:12px;
+}
+
+table{
+  width:100%;
+  border-collapse:collapse;
+  min-width:560px;
+  font-size:12px;
+}
+
+th{
+  color:var(--muted);
+  text-align:left;
+  background:#11171a;
+  padding:10px;
+}
+
+td{
+  padding:10px;
+  border-top:1px solid var(--border);
+}
+
+.format-good{
+  color:var(--accent);
+  font-weight:800;
+}
+
+/* MODE BUTTONS */
+
+.modes{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:8px;
+  margin-top:15px;
+}
+
+.mode{
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:var(--card2);
+  color:var(--text);
+  padding:11px 5px;
+  font-size:12px;
+  font-weight:700;
+}
+
+.mode.active{
+  border-color:var(--accent);
+  color:var(--accent);
+  background:#112421;
+}
+
+.mode-icon{
+  display:block;
+  font-size:19px;
+  margin-bottom:4px;
+}
+
+/* OPTIONS */
+
+.options{
+  margin-top:15px;
+}
+
+.option-row{
+  margin-bottom:12px;
+}
+
+.hidden{
+  display:none!important;
+}
+
+/* SECTION */
+
+.section-title{
+  font-size:14px;
+  font-weight:900;
+  margin:19px 0 11px;
+}
+
+.time-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:9px;
+}
+
+/* CHECKBOXES */
+
+.checks{
+  display:grid;
+  gap:9px;
+  margin-top:14px;
+}
+
+.check{
+  display:flex;
+  align-items:center;
+  gap:9px;
+  color:var(--text);
+  font-size:13px;
+  font-weight:600;
+}
+
+.check input{
+  width:18px;
+  height:18px;
+  accent-color:var(--accent);
+}
+
+/* QUEUE */
+
+.queue-item{
+  padding:12px;
+  background:var(--card2);
+  border:1px solid var(--border);
+  border-radius:12px;
+  margin-top:9px;
+}
+
+.queue-name{
+  font-weight:800;
+  font-size:13px;
+}
+
+.queue-status{
+  color:var(--muted);
+  font-size:11px;
+  margin-top:4px;
+}
+
+.progress{
+  height:5px;
+  background:#303a3e;
+  border-radius:20px;
+  overflow:hidden;
+  margin-top:9px;
+}
+
+.progress-bar{
+  width:0%;
+  height:100%;
+  background:var(--accent);
+}
+
+.empty{
+  color:var(--muted);
+  text-align:center;
+  padding:18px;
+  font-size:12px;
+}
+
+/* ENGINE */
+
+.engine-row{
+  display:flex;
+  justify-content:space-between;
+  padding:10px 0;
+  border-bottom:1px solid var(--border);
+  font-size:13px;
+}
+
+.engine-row:last-child{
+  border-bottom:0;
+}
+
+.offline{
+  color:var(--red);
+}
+
+.badge{
+  font-size:10px;
+  font-weight:900;
+}
+
+.note{
+  color:var(--muted);
+  font-size:11px;
+  line-height:1.5;
+  margin-top:10px;
+}
+
+footer{
+  text-align:center;
+  color:#657277;
+  font-size:10px;
+  padding:8px;
+}
+
+/* MOBILE */
+
+@media(max-width:420px){
+  .app{
+    padding-left:10px;
+    padding-right:10px;
+  }
+
+  .card{
+    padding:14px;
+  }
+
+  .thumbnail{
+    width:88px;
+    flex-basis:88px;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+  <!-- HEADER -->
+  <header class="header">
+
+    <div class="logo">
+      <div class="logo-icon">⬇</div>
+
+      <div>
+        <h1>Media Downloader</h1>
+        <div class="subtitle">
+          yt-dlp + FFmpeg • Local Web App
+        </div>
+      </div>
+    </div>
+
+    <button class="settings" title="Settings">⚙</button>
+
+  </header>
+
+
+  <!-- URL -->
+  <section class="card">
+
+    <div class="card-title">
+      🔗 Media URL
+    </div>
+
+    <label for="url">
+      Paste a video or media link
+    </label>
+
+    <div class="url-box">
+
+      <input
+        id="url"
+        type="url"
+        placeholder="https://..."
+        autocomplete="off"
+        spellcheck="false"
+      >
+
+      <button
+        class="paste"
+        onclick="pasteURL()"
+      >
+        Paste
+      </button>
+
+    </div>
+
+    <button
+      class="primary"
+      onclick="analyze()"
+    >
+      🔍 Analyze URL
+    </button>
+
+    <div id="status" class="status">
+      Local engine not connected
+    </div>
+
+  </section>
+
+
+  <!-- MEDIA -->
+  <section id="media" class="card media">
+
+    <div class="media-info">
+
+      <div class="thumbnail">
+        ▶
+      </div>
+
+      <div>
+        <div id="title" class="media-title">
+          Media title
+        </div>
+
+        <div id="meta" class="media-meta">
+          Channel • Duration
+        </div>
+      </div>
+
+    </div>
+
+
+    <!-- FORMATS -->
+    <div class="section-title">
+      📋 Available Formats
+    </div>
+
+    <div class="table-wrap">
+
+      <table>
+
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Type</th>
+            <th>Quality</th>
+            <th>Codec</th>
+            <th>Size</th>
+          </tr>
+        </thead>
+
+        <tbody id="formats">
+
+          <tr>
+            <td>137</td>
+            <td>Video</td>
+            <td class="format-good">1080p</td>
+            <td>AVC</td>
+            <td>82 MB</td>
+          </tr>
+
+          <tr>
+            <td>136</td>
+            <td>Video</td>
+            <td>720p</td>
+            <td>AVC</td>
+            <td>41 MB</td>
+          </tr>
+
+          <tr>
+            <td>140</td>
+            <td>Audio</td>
+            <td>—</td>
+            <td>AAC</td>
+            <td>12 MB</td>
+          </tr>
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+
+    <!-- MODES -->
+    <div class="modes">
+
+      <button
+        class="mode active"
+        onclick="setMode('video',this)"
+      >
+        <span class="mode-icon">🎬</span>
+        Video
+      </button>
+
+      <button
+        class="mode"
+        onclick="setMode('audio',this)"
+      >
+        <span class="mode-icon">🎵</span>
+        Audio
+      </button>
+
+      <button
+        class="mode"
+        onclick="setMode('advanced',this)"
+      >
+        <span class="mode-icon">⚙</span>
+        Advanced
+      </button>
+
+    </div>
+
+
+    <!-- VIDEO OPTIONS -->
+    <div id="videoOptions" class="options">
+
+      <div class="option-row">
+
+        <label>Video quality</label>
+
+        <select>
+          <option>Best available</option>
+          <option>2160p • 4K</option>
+          <option>1440p</option>
+          <option>1080p</option>
+          <option>720p</option>
+          <option>480p</option>
+          <option>360p</option>
+        </select>
+
+      </div>
+
+      <div class="option-row">
+
+        <label>Container</label>
+
+        <select>
+          <option>Auto</option>
+          <option>MP4</option>
+          <option>MKV</option>
+          <option>WebM</option>
+        </select>
+
+      </div>
+
+    </div>
+
+
+    <!-- AUDIO OPTIONS -->
+    <div id="audioOptions" class="options hidden">
+
+      <div class="option-row">
+
+        <label>Audio format</label>
+
+        <select>
+          <option>Best available</option>
+          <option>MP3</option>
+          <option>M4A</option>
+          <option>Opus</option>
+          <option>FLAC</option>
+        </select>
+
+      </div>
+
+      <div class="option-row">
+
+        <label>Audio quality</label>
+
+        <select>
+          <option>Best</option>
+          <option>320 kbps</option>
+          <option>256 kbps</option>
+          <option>192 kbps</option>
+          <option>128 kbps</option>
+        </select>
+
+      </div>
+
+    </div>
+
+
+    <!-- ADVANCED OPTIONS -->
+    <div id="advancedOptions" class="options hidden">
+
+      <div class="option-row">
+
+        <label>yt-dlp format selector</label>
+
+        <input
+          value="bv*+ba/b"
+          spellcheck="false"
+        >
+
+      </div>
+
+      <div class="option-row">
+
+        <label>Additional yt-dlp arguments</label>
+
+        <textarea
+          rows="4"
+          placeholder="Optional advanced arguments..."
+        ></textarea>
+
+      </div>
+
+    </div>
+
+
+    <!-- SECTION -->
+    <div class="section-title">
+      ✂ Download Section
+    </div>
+
+    <div class="time-grid">
+
+      <div>
+        <label>Start</label>
+        <input
+          placeholder="00:00:00"
+          inputmode="numeric"
+        >
+      </div>
+
+      <div>
+        <label>End</label>
+        <input
+          placeholder="00:00:00"
+          inputmode="numeric"
+        >
+      </div>
+
+    </div>
+
+
+    <!-- EXTRA OPTIONS -->
+    <div class="checks">
+
+      <label class="check">
+        <input type="checkbox">
+        Download subtitles
+      </label>
+
+      <label class="check">
+        <input type="checkbox">
+        Embed thumbnail
+      </label>
+
+      <label class="check">
+        <input type="checkbox">
+        Embed metadata
+      </label>
+
+    </div>
+
+
+    <button
+      class="primary"
+      onclick="addDownload()"
+    >
+      ⬇ Add to Download Queue
+    </button>
+
+  </section>
+
+
+  <!-- QUEUE -->
+  <section class="card">
+
+    <div class="card-title">
+      📥 Download Queue
+    </div>
+
+    <div id="queue">
+
+      <div class="empty">
+        No downloads yet.
+      </div>
+
+    </div>
+
+  </section>
+
+
+  <!-- ENGINE -->
+  <section class="card">
+
+    <div style="
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+    ">
+
+      <div class="card-title" style="margin:0">
+        ⚙ Local Engine
+      </div>
+
+      <span
+        id="engineBadge"
+        class="badge offline"
+      >
+        OFFLINE
+      </span>
+
+    </div>
+
+    <div class="engine-row">
+      <span>yt-dlp</span>
+      <strong id="ytVersion">
+        Not detected
+      </strong>
+    </div>
+
+    <div class="engine-row">
+      <span>FFmpeg</span>
+      <strong id="ffVersion">
+        Not detected
+      </strong>
+    </div>
+
+    <div class="note">
+      The interface is ready. In the next milestone,
+      this web app will communicate with the local
+      yt-dlp and FFmpeg engine.
+    </div>
+
+  </section>
+
+
+  <footer>
+    Media Downloader • Milestone 01 • v0.1
+  </footer>
+
+</div>
+
+
+<script>
+
+function pasteURL(){
+
+  if(navigator.clipboard){
+
+    navigator.clipboard.readText()
+      .then(text => {
+
+        document.getElementById("url").value = text;
+
+      })
+      .catch(() => {
+
+        alert("Clipboard permission was not available. Paste manually.");
+
+      });
+
+  }
+
+}
+
+
+function analyze(){
+
+  const url =
+    document.getElementById("url").value.trim();
+
+  if(!url){
+
+    alert("Please enter a media URL first.");
+
+    return;
+
+  }
+
+  const status =
+    document.getElementById("status");
+
+  status.textContent =
+    "UI test successful • local engine not connected yet";
+
+  document.getElementById("media")
+    .classList.add("show");
+
+}
+
+
+function setMode(mode,button){
+
+  document
+    .querySelectorAll(".mode")
+    .forEach(b => b.classList.remove("active"));
+
+  button.classList.add("active");
+
+  document
+    .getElementById("videoOptions")
+    .classList.toggle(
+      "hidden",
+      mode !== "video"
+    );
+
+  document
+    .getElementById("audioOptions")
+    .classList.toggle(
+      "hidden",
+      mode !== "audio"
+    );
+
+  document
+    .getElementById("advancedOptions")
+    .classList.toggle(
+      "hidden",
+      mode !== "advanced"
+    );
+
+}
+
+
+function addDownload(){
+
+  const url =
+    document.getElementById("url").value.trim();
+
+  if(!url){
+
+    alert("Analyze a URL first.");
+
+    return;
+
+  }
+
+  const queue =
+    document.getElementById("queue");
+
+  const empty =
+    queue.querySelector(".empty");
+
+  if(empty) empty.remove();
+
+  const item =
+    document.createElement("div");
+
+  item.className = "queue-item";
+
+  item.innerHTML = `
+    <div class="queue-name">
+      ${escapeHTML(url)}
+    </div>
+
+    <div class="queue-status">
+      Waiting for local engine…
+    </div>
+
+    <div class="progress">
+      <div class="progress-bar"></div>
+    </div>
+  `;
+
+  queue.appendChild(item);
+
+}
+
+
+function escapeHTML(text){
+
+  const div =
+    document.createElement("div");
+
+  div.textContent = text;
+
+  return div.innerHTML;
+
+}
+
+</script>
+
+</body>
+</html>
