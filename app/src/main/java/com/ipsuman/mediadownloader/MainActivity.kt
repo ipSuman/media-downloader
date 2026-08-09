@@ -30,6 +30,7 @@ class MainActivity : AppCompatActivity() {
         webView.settings.domStorageEnabled = true
         webView.settings.allowFileAccess = true
         webView.settings.allowContentAccess = true
+        webView.settings.allowUniversalAccessFromFileURLs = true
 
         webView.webViewClient = WebViewClient()
 
