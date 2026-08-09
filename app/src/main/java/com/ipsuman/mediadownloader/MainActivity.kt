@@ -15,8 +15,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Start local engine API
-        engineServer = LocalEngineServer()
+        // Start local engine API and diagnostic logging.
+        engineServer = LocalEngineServer(this)
 
         try {
             engineServer?.start()
