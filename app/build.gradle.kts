@@ -3,6 +3,7 @@ import org.gradle.api.tasks.Copy
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.chaquo.python")
 }
 
 android {
@@ -33,6 +34,12 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+    
+    chaquopy {
+        defaultConfig {
+        version = "3.11"
+        }
     }
 
     sourceSets {
