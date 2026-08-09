@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
+        android:name="com.chaquo.python.android.PythonApplication"
         android:allowBackup="true"
         android:label="Media Downloader"
         android:supportsRtl="true"
