@@ -813,79 +813,734 @@ footer{
 
 </div>
 
-
 <script>
 
-function pasteURL(){
+const ENGINE_PORTS = [8765, 8787, 8080];
 
-  if(navigator.clipboard){
+let engineBase = null;
 
-    navigator.clipboard.readText()
-      .then(text => {
 
-        document.getElementById("url").value = text;
+/* --------------------------------
+   ENGINE DISCOVERY
+-------------------------------- */
 
-      })
-      .catch(() => {
+async function discoverEngine(){
 
-        alert("Clipboard permission was not available. Paste manually.");
+  setEngineStatus(
+    "Checking for local engine…",
+    "offline"
+  );
 
-      });
+  for(const port of ENGINE_PORTS){
+
+    const base =
+      `http://127.0.0.1:${port}/api`;
+
+    try{
+
+      const controller =
+        new AbortController();
+
+      const timeout =
+        setTimeout(
+          () => controller.abort(),
+          1200
+        );
+
+      const response =
+        await fetch(
+          `${base}/status`,
+          {
+            method:"GET",
+            signal:controller.signal
+          }
+        );
+
+      clearTimeout(timeout);
+
+      if(!response.ok) continue;
+
+      const data =
+        await response.json();
+
+      if(data.ok){
+
+        engineBase = base;
+
+        setEngineStatus(
+          "🟢 Local engine connected",
+          "online"
+        );
+
+        await loadVersions();
+
+        return true;
+      }
+
+    }catch(error){
+
+      // Try the next port.
+
+    }
+
+  }
+
+  setEngineStatus(
+    "🔴 Local engine not detected",
+    "offline"
+  );
+
+  return false;
+}
+
+
+/* --------------------------------
+   ENGINE STATUS UI
+-------------------------------- */
+
+function setEngineStatus(message,state){
+
+  const status =
+    document.getElementById("status");
+
+  const badge =
+    document.getElementById("engineBadge");
+
+  status.textContent = message;
+
+  if(state === "online"){
+
+    badge.textContent = "ONLINE";
+
+    badge.classList.remove("offline");
+
+    badge.style.color =
+      "var(--accent)";
+
+  }else{
+
+    badge.textContent = "OFFLINE";
+
+    badge.classList.add("offline");
+
+    badge.style.color =
+      "var(--red)";
 
   }
 
 }
 
 
-function analyze(){
+/* --------------------------------
+   VERSION INFORMATION
+-------------------------------- */
+
+async function loadVersions(){
+
+  if(!engineBase) return;
+
+  try{
+
+    const response =
+      await fetch(
+        `${engineBase}/versions`
+      );
+
+    if(!response.ok) return;
+
+    const data =
+      await response.json();
+
+    const yt =
+      document.getElementById("ytVersion");
+
+    const ff =
+      document.getElementById("ffVersion");
+
+    yt.textContent =
+      data.ytdlp?.installed ||
+      "Unknown";
+
+    ff.textContent =
+      data.ffmpeg?.installed ||
+      "Unknown";
+
+  }catch(error){
+
+    console.log(
+      "Version information unavailable",
+      error
+    );
+
+  }
+
+}
+
+
+/* --------------------------------
+   PASTE
+-------------------------------- */
+
+function pasteURL(){
+
+  if(!navigator.clipboard){
+
+    alert(
+      "Clipboard access is unavailable. Please paste manually."
+    );
+
+    return;
+  }
+
+  navigator.clipboard
+    .readText()
+    .then(text => {
+
+      document
+        .getElementById("url")
+        .value = text;
+
+    })
+    .catch(() => {
+
+      alert(
+        "Clipboard permission was not available. Paste manually."
+      );
+
+    });
+
+}
+
+
+/* --------------------------------
+   ANALYZE
+-------------------------------- */
+
+async function analyze(){
 
   const url =
-    document.getElementById("url").value.trim();
+    document
+      .getElementById("url")
+      .value
+      .trim();
 
   if(!url){
 
-    alert("Please enter a media URL first.");
+    alert(
+      "Please enter a media URL first."
+    );
 
     return;
+  }
+
+
+  /* Engine not available */
+
+  if(!engineBase){
+
+    const found =
+      await discoverEngine();
+
+    if(!found){
+
+      document
+        .getElementById("status")
+        .textContent =
+        "Engine required for real analysis.";
+
+      return;
+    }
 
   }
+
 
   const status =
     document.getElementById("status");
 
   status.textContent =
-    "UI test successful • local engine not connected yet";
+    "🔍 Analyzing…";
 
-  document.getElementById("media")
-    .classList.add("show");
+
+  try{
+
+    const response =
+      await fetch(
+        `${engineBase}/analyze`,
+        {
+          method:"POST",
+
+          headers:{
+            "Content-Type":
+              "application/json"
+          },
+
+          body:JSON.stringify({
+            url:url
+          })
+        }
+      );
+
+
+    if(!response.ok){
+
+      throw new Error(
+        "Analysis request failed"
+      );
+
+    }
+
+
+    const data =
+      await response.json();
+
+
+    if(!data.ok){
+
+      throw new Error(
+        data.error ||
+        "Unable to analyze URL"
+      );
+
+    }
+
+
+    showMediaInfo(data);
+
+    status.textContent =
+      "🟢 Analysis complete";
+
+  }catch(error){
+
+    status.textContent =
+      "❌ Analysis failed";
+
+    console.error(error);
+
+    alert(
+      "The local engine could not analyze this URL."
+    );
+
+  }
 
 }
 
 
-function setMode(mode,button){
+/* --------------------------------
+   DISPLAY MEDIA INFORMATION
+-------------------------------- */
+
+function showMediaInfo(data){
+
+  document
+    .getElementById("media")
+    .classList.add("show");
+
+
+  document
+    .getElementById("title")
+    .textContent =
+      data.title ||
+      "Unknown title";
+
+
+  const duration =
+    formatDuration(
+      data.duration
+    );
+
+
+  document
+    .getElementById("meta")
+    .textContent =
+      `${data.uploader || "Unknown"} • ${duration}`;
+
+
+  const formats =
+    document
+      .getElementById("formats");
+
+
+  formats.innerHTML = "";
+
+
+  if(!data.formats ||
+     !data.formats.length){
+
+    formats.innerHTML = `
+      <tr>
+        <td colspan="5"
+            style="text-align:center;color:var(--muted)">
+          No format information available
+        </td>
+      </tr>
+    `;
+
+    return;
+  }
+
+
+  data.formats.forEach(format => {
+
+    const row =
+      document.createElement("tr");
+
+
+    const type =
+      format.vcodec &&
+      format.vcodec !== "none"
+        ? "Video"
+        : "Audio";
+
+
+    const quality =
+      format.height
+        ? `${format.height}p`
+        : "—";
+
+
+    const codec =
+      format.vcodec &&
+      format.vcodec !== "none"
+        ? format.vcodec
+        : format.acodec || "—";
+
+
+    const size =
+      format.filesize ||
+      format.filesize_approx
+        ? formatBytes(
+            format.filesize ||
+            format.filesize_approx
+          )
+        : "—";
+
+
+    row.innerHTML = `
+      <td>${escapeHTML(
+        String(format.format_id || "")
+      )}</td>
+
+      <td>${escapeHTML(type)}</td>
+
+      <td class="${
+        format.height >= 1080
+          ? "format-good"
+          : ""
+      }">
+        ${escapeHTML(quality)}
+      </td>
+
+      <td>${escapeHTML(
+        String(codec)
+      )}</td>
+
+      <td>${escapeHTML(size)}</td>
+    `;
+
+
+    formats.appendChild(row);
+
+  });
+
+}
+
+
+/* --------------------------------
+   DOWNLOAD QUEUE
+-------------------------------- */
+
+async function addDownload(){
+
+  const url =
+    document
+      .getElementById("url")
+      .value
+      .trim();
+
+
+  if(!url){
+
+    alert(
+      "Analyze a URL first."
+    );
+
+    return;
+  }
+
+
+  if(!engineBase){
+
+    const found =
+      await discoverEngine();
+
+    if(!found){
+
+      alert(
+        "Local engine is not running yet."
+      );
+
+      return;
+    }
+
+  }
+
+
+  const queue =
+    document.getElementById("queue");
+
+
+  const empty =
+    queue.querySelector(".empty");
+
+
+  if(empty) empty.remove();
+
+
+  const item =
+    document.createElement("div");
+
+
+  item.className =
+    "queue-item";
+
+
+  item.innerHTML = `
+    <div class="queue-name">
+      ${escapeHTML(url)}
+    </div>
+
+    <div class="queue-status">
+      Sending to local engine…
+    </div>
+
+    <div class="progress">
+      <div class="progress-bar"></div>
+    </div>
+  `;
+
+
+  queue.appendChild(item);
+
+
+  try{
+
+    const response =
+      await fetch(
+        `${engineBase}/download`,
+        {
+          method:"POST",
+
+          headers:{
+            "Content-Type":
+              "application/json"
+          },
+
+          body:JSON.stringify({
+
+            url:url,
+
+            format:"bv*+ba/b",
+
+            start:"",
+
+            end:"",
+
+            audio_only:false,
+
+            audio_format:"",
+
+            subtitles:false,
+
+            thumbnail:false,
+
+            metadata:false
+
+          })
+        }
+      );
+
+
+    const data =
+      await response.json();
+
+
+    if(!response.ok ||
+       !data.ok){
+
+      throw new Error(
+        data.error ||
+        "Download request failed"
+      );
+
+    }
+
+
+    item.querySelector(
+      ".queue-status"
+    ).textContent =
+      `Queued • Job ${data.job_id}`;
+
+
+    monitorDownload(
+      data.job_id,
+      item
+    );
+
+
+  }catch(error){
+
+    item.querySelector(
+      ".queue-status"
+    ).textContent =
+      "❌ Failed to start";
+
+    console.error(error);
+
+  }
+
+}
+
+
+/* --------------------------------
+   DOWNLOAD PROGRESS
+-------------------------------- */
+
+async function monitorDownload(
+  jobId,
+  item
+){
+
+  if(!engineBase) return;
+
+
+  try{
+
+    const response =
+      await fetch(
+        `${engineBase}/download/${encodeURIComponent(jobId)}`
+      );
+
+
+    if(!response.ok) return;
+
+
+    const data =
+      await response.json();
+
+
+    const status =
+      item.querySelector(
+        ".queue-status"
+      );
+
+
+    const bar =
+      item.querySelector(
+        ".progress-bar"
+      );
+
+
+    if(data.percent != null){
+
+      bar.style.width =
+        `${Math.max(
+          0,
+          Math.min(
+            100,
+            Number(data.percent)
+          )
+        )}%`;
+
+    }
+
+
+    status.textContent =
+      `${data.status || "working"}`
+      + (data.speed
+        ? ` • ${data.speed}`
+        : "")
+      + (data.eta
+        ? ` • ETA ${data.eta}`
+        : "");
+
+
+    if(
+      data.status !== "completed" &&
+      data.status !== "failed" &&
+      data.status !== "cancelled"
+    ){
+
+      setTimeout(
+        () =>
+          monitorDownload(
+            jobId,
+            item
+          ),
+        1000
+      );
+
+    }
+
+  }catch(error){
+
+    console.log(
+      "Progress check failed",
+      error
+    );
+
+  }
+
+}
+
+
+/* --------------------------------
+   MODE SWITCHING
+-------------------------------- */
+
+function setMode(
+  mode,
+  button
+){
 
   document
     .querySelectorAll(".mode")
-    .forEach(b => b.classList.remove("active"));
+    .forEach(
+      b =>
+        b.classList.remove(
+          "active"
+        )
+    );
 
-  button.classList.add("active");
+
+  button.classList.add(
+    "active"
+  );
+
 
   document
-    .getElementById("videoOptions")
+    .getElementById(
+      "videoOptions"
+    )
     .classList.toggle(
       "hidden",
       mode !== "video"
     );
 
+
   document
-    .getElementById("audioOptions")
+    .getElementById(
+      "audioOptions"
+    )
     .classList.toggle(
       "hidden",
       mode !== "audio"
     );
 
+
   document
-    .getElementById("advancedOptions")
+    .getElementById(
+      "advancedOptions"
+    )
     .classList.toggle(
       "hidden",
       mode !== "advanced"
@@ -894,47 +1549,83 @@ function setMode(mode,button){
 }
 
 
-function addDownload(){
+/* --------------------------------
+   HELPERS
+-------------------------------- */
 
-  const url =
-    document.getElementById("url").value.trim();
+function formatDuration(seconds){
 
-  if(!url){
+  if(!seconds)
+    return "Unknown duration";
 
-    alert("Analyze a URL first.");
 
-    return;
+  seconds =
+    Math.floor(
+      Number(seconds)
+    );
+
+
+  const h =
+    Math.floor(
+      seconds / 3600
+    );
+
+
+  const m =
+    Math.floor(
+      (seconds % 3600) / 60
+    );
+
+
+  const s =
+    seconds % 60;
+
+
+  if(h > 0){
+
+    return `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
 
   }
 
-  const queue =
-    document.getElementById("queue");
 
-  const empty =
-    queue.querySelector(".empty");
+  return `${m}:${String(s).padStart(2,"0")}`;
 
-  if(empty) empty.remove();
+}
 
-  const item =
-    document.createElement("div");
 
-  item.className = "queue-item";
+function formatBytes(bytes){
 
-  item.innerHTML = `
-    <div class="queue-name">
-      ${escapeHTML(url)}
-    </div>
+  if(!bytes)
+    return "—";
 
-    <div class="queue-status">
-      Waiting for local engine…
-    </div>
 
-    <div class="progress">
-      <div class="progress-bar"></div>
-    </div>
-  `;
+  const units =
+    ["B","KB","MB","GB","TB"];
 
-  queue.appendChild(item);
+
+  let i = 0;
+
+
+  let value =
+    Number(bytes);
+
+
+  while(
+    value >= 1024 &&
+    i < units.length - 1
+  ){
+
+    value /= 1024;
+
+    i++;
+
+  }
+
+
+  return `${value.toFixed(
+    value >= 100 ? 0 :
+    value >= 10 ? 1 : 2
+  )} ${units[i]}`;
 
 }
 
@@ -942,13 +1633,30 @@ function addDownload(){
 function escapeHTML(text){
 
   const div =
-    document.createElement("div");
+    document.createElement(
+      "div"
+    );
 
-  div.textContent = text;
+  div.textContent =
+    text;
 
   return div.innerHTML;
 
 }
+
+
+/* --------------------------------
+   STARTUP
+-------------------------------- */
+
+window.addEventListener(
+  "DOMContentLoaded",
+  () => {
+
+    discoverEngine();
+
+  }
+);
 
 </script>
 
