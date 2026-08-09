@@ -1,5 +1,6 @@
 package com.ipsuman.mediadownloader
 
+import com.arthenica.ffmpegkit.FFmpegKitConfig
 import android.content.ContentValues
 import android.content.Context
 import android.os.Build
@@ -95,8 +96,8 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 "latest": "$version"
               },
               "ffmpeg": {
-                "installed": "Not installed",
-                "latest": "Unknown"
+                "installed": "${FFmpegKitConfig.getFFmpegVersion()}",
+                "latest": "${FFmpegKitConfig.getFFmpegVersion()}"
               }
             }
             """.trimIndent()
@@ -112,8 +113,8 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 "latest": "Unknown"
               },
               "ffmpeg": {
-                "installed": "Not installed",
-                "latest": "Unknown"
+                "installed": "${FFmpegKitConfig.getFFmpegVersion()}",
+                "latest": "${FFmpegKitConfig.getFFmpegVersion()}"
               },
               "error": "${e.message ?: "Python engine error"}"
             }
