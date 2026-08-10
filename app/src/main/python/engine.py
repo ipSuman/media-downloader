@@ -5,14 +5,42 @@ import re
 import yt_dlp
 
 
+_FFMPEG_LOCATION = ""
+
+
 def get_version():
     return yt_dlp.version.__version__
+
+
+def set_ffmpeg_location(path):
+    """Tell yt-dlp where the bundled Android FFmpeg/FFprobe binaries live."""
+    global _FFMPEG_LOCATION
+    location = os.path.abspath(str(path or "").strip())
+    if not location or not os.path.isdir(location):
+        raise ValueError(f"FFmpeg directory does not exist: {location}")
+    _FFMPEG_LOCATION = location
+    return _FFMPEG_LOCATION
+
+
+def get_ffmpeg_status():
+    if not _FFMPEG_LOCATION:
+        return {"installed": False, "path": ""}
+
+    ffmpeg = os.path.join(_FFMPEG_LOCATION, "ffmpeg")
+    ffprobe = os.path.join(_FFMPEG_LOCATION, "ffprobe")
+    return {
+        "installed": os.path.isfile(ffmpeg) and os.access(ffmpeg, os.X_OK),
+        "path": _FFMPEG_LOCATION,
+        "ffmpeg": ffmpeg,
+        "ffprobe": ffprobe,
+    }
 
 
 def status():
     return {
         "ok": True,
-        "ytdlp": get_version()
+        "ytdlp": get_version(),
+        "ffmpeg": get_ffmpeg_status(),
     }
 
 
@@ -27,6 +55,8 @@ def analyze(url):
         "skip_download": True,
         "noplaylist": True,
     }
+    if _FFMPEG_LOCATION:
+        options["ffmpeg_location"] = _FFMPEG_LOCATION
 
     with yt_dlp.YoutubeDL(options) as ydl:
         info = ydl.extract_info(url.strip(), download=False)
@@ -95,13 +125,7 @@ def download(
     audio_quality="",
     merge_output_format="",
 ):
-    """Download according to the selector supplied by the web UI.
-
-    No silent quality downgrade is performed.  If a selected format requires
-    FFmpeg (for example video+audio merging or MP3 conversion), yt-dlp's
-    error is returned to the Android job log instead of substituting a lower
-    quality combined stream.
-    """
+    """Download using yt-dlp with the bundled FFmpeg postprocessor available."""
     if not isinstance(url, str) or not url.strip():
         raise ValueError("URL is required")
 
@@ -115,11 +139,6 @@ def download(
     selector = str(format_selector or "").strip()
     if not selector:
         selector = "bestaudio/best" if audio_only else "bv*+ba/b"
-
-    # MP3 is a conversion target, not a normal YouTube source stream.
-    # Refuse it explicitly until the optional FFmpeg engine is installed.
-    if audio_only and str(audio_format).strip().lower() == "mp3":
-        raise RuntimeError("MP3 conversion requires FFmpeg. Choose M4A/Opus/FLAC for a direct audio download.")
 
     def hook(data):
         state = data.get("status")
@@ -151,13 +170,32 @@ def download(
         "overwrites": False,
     }
 
+    if _FFMPEG_LOCATION:
+        options["ffmpeg_location"] = _FFMPEG_LOCATION
+    else:
+        raise RuntimeError("Bundled FFmpeg is not initialized")
+
     if merge_output_format and merge_output_format != "auto":
         options["merge_output_format"] = merge_output_format
 
-    if audio_only and audio_quality and str(audio_quality).lower() != "best":
-        match = re.search(r"(\d+)", str(audio_quality))
-        if match:
-            options["format_sort"] = [f"abr:{match.group(1)}"]
+    if audio_only:
+        target_format = str(audio_format or "").strip().lower()
+        if target_format:
+            options["postprocessors"] = [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": target_format,
+                    "preferredquality": "0",
+                }
+            ]
+
+        if audio_quality and str(audio_quality).lower() != "best":
+            quality = str(audio_quality).strip()
+            if re.fullmatch(r"\d+(?:\.\d+)?", quality):
+                quality = f"{quality}K"
+            options["postprocessor_args"] = {
+                "FFmpegExtractAudio": ["-b:a", quality]
+            }
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
