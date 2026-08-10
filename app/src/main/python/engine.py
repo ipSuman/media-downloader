@@ -1,3 +1,5 @@
+import json
+
 import yt_dlp
 
 
@@ -59,3 +61,7 @@ def analyze(url):
         "is_live": info.get("is_live"),
         "formats": formats,
     }
+
+
+def analyze_json(url):
+    return json.dumps(analyze(url), ensure_ascii=False)
