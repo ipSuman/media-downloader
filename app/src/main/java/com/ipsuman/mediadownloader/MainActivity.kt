@@ -22,11 +22,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         engineServer = LocalEngineServer(this)
-        try {
-            engineServer?.start()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        try { engineServer?.start() } catch (e: Exception) { e.printStackTrace() }
 
         webView = WebView(this)
         webView.settings.javaScriptEnabled = true
@@ -51,14 +47,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun injectSelectionBridge() {
         try {
-            // Keep the proven cut workflow. Do not inject the experimental
-            // cut-input-fix layer which was causing the sequence to become
-            // confusing/non-repeatable.
-            val scripts = listOf("theme.js", "selection-bridge.js")
+            val scripts = listOf("theme.js", "selection-bridge.js", "cut-keyboard-fix.js")
             for (scriptName in scripts) {
-                val script = assets.open(scriptName)
-                    .bufferedReader(Charsets.UTF_8)
-                    .use { it.readText() }
+                val script = assets.open(scriptName).bufferedReader(Charsets.UTF_8).use { it.readText() }
                 webView.evaluateJavascript(script, null)
             }
         } catch (e: Exception) {
@@ -83,8 +74,7 @@ class MainActivity : AppCompatActivity() {
                     },120);
                   },false);
                 })();
-                """.trimIndent(),
-                null
+                """.trimIndent(), null
             )
         }, 250)
     }
@@ -97,16 +87,12 @@ class MainActivity : AppCompatActivity() {
                 addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                 addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
                 prefs.getString("download_tree_uri", null)?.let {
-                    try {
-                        putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(it))
-                    } catch (_: Exception) {}
+                    try { putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(it)) } catch (_: Exception) {}
                 }
             }
             android.util.Log.d("MediaDownloader", "Opening folder picker")
             startActivityForResult(intent, folderPickerRequestCode)
-        } catch (e: Exception) {
-            android.util.Log.e("MediaDownloader", "Could not open folder picker", e)
-        }
+        } catch (e: Exception) { android.util.Log.e("MediaDownloader", "Could not open folder picker", e) }
     }
 
     private fun sendSelectedFolderToWeb() {
@@ -116,17 +102,13 @@ class MainActivity : AppCompatActivity() {
         val escapedName = JSONObjectEscaper.escape(name)
         webView.post {
             webView.evaluateJavascript(
-                "window.onNativeFolderSelected && window.onNativeFolderSelected('$escapedUri','$escapedName');",
-                null
+                "window.onNativeFolderSelected && window.onNativeFolderSelected('$escapedUri','$escapedName');", null
             )
         }
     }
 
     private fun clearSelectedFolder() {
-        prefs.edit()
-            .remove("download_tree_uri")
-            .remove("download_tree_name")
-            .apply()
+        prefs.edit().remove("download_tree_uri").remove("download_tree_name").apply()
         sendSelectedFolderToWeb()
     }
 
@@ -134,43 +116,23 @@ class MainActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != folderPickerRequestCode || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
-
         try {
-            val flags = data.flags and
-                (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             contentResolver.takePersistableUriPermission(uri, flags)
-        } catch (e: Exception) {
-            android.util.Log.w("MediaDownloader", "Could not persist folder permission", e)
-        }
+        } catch (e: Exception) { android.util.Log.w("MediaDownloader", "Could not persist folder permission", e) }
 
         val folderName = try {
             androidx.documentfile.provider.DocumentFile.fromTreeUri(this, uri)?.name ?: "Selected folder"
-        } catch (_: Exception) {
-            "Selected folder"
-        }
+        } catch (_: Exception) { "Selected folder" }
 
-        prefs.edit()
-            .putString("download_tree_uri", uri.toString())
-            .putString("download_tree_name", folderName)
-            .apply()
+        prefs.edit().putString("download_tree_uri", uri.toString()).putString("download_tree_name", folderName).apply()
         sendSelectedFolderToWeb()
     }
 
     private inner class AndroidBridge {
-        @JavascriptInterface
-        fun chooseDownloadFolder() {
-            runOnUiThread { openFolderPicker() }
-        }
-
-        @JavascriptInterface
-        fun clearDownloadFolder() {
-            runOnUiThread { clearSelectedFolder() }
-        }
-
-        @JavascriptInterface
-        fun getDownloadFolderName(): String {
-            return prefs.getString("download_tree_name", "") ?: ""
-        }
+        @JavascriptInterface fun chooseDownloadFolder() { runOnUiThread { openFolderPicker() } }
+        @JavascriptInterface fun clearDownloadFolder() { runOnUiThread { clearSelectedFolder() } }
+        @JavascriptInterface fun getDownloadFolderName(): String = prefs.getString("download_tree_name", "") ?: ""
     }
 
     private object JSONObjectEscaper {
