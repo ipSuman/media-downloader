@@ -163,6 +163,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 throw IllegalStateException("Could not create temporary download directory")
             }
             jobs[jobId] = jobDir
+            writeJobStatus(jobDir, """{"status":"starting","percent":0}""")
 
             val format = request.optString("format", "")
             val audioOnly = request.optBoolean("audio_only", false)
@@ -187,13 +188,14 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                         sourcePath,
                         result.optString("filename", sourcePath.name)
                     )
-                    JSONObject().apply {
+                    val completed = JSONObject().apply {
                         put("status", "completed")
                         put("percent", 100)
                         put("filename", destination.first)
                         put("uri", destination.second)
                         put("size", result.optLong("size", sourcePath.length()))
-                    }.toString().also { writeJobStatus(jobDir, it) }
+                    }.toString()
+                    writeJobStatus(jobDir, completed)
                     log("Download job $jobId completed: ${destination.first}")
                     sourcePath.delete()
                 } catch (e: Exception) {
@@ -209,7 +211,6 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 }
             }
 
-            writeJobStatus(jobDir, """{"status":"starting","percent":0}""")
             jsonResponse(
                 Response.Status.OK,
                 JSONObject().apply {
@@ -304,7 +305,13 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             }
             jsonResponse(Response.Status.OK, raw)
         } catch (e: Exception) {
-            jsonResponse(Response.Status.INTERNAL_ERROR, """{"status":"failed","error":"${JSONObject.quote(e.message ?: "Status unavailable")}"}""")
+            jsonResponse(
+                Response.Status.INTERNAL_ERROR,
+                JSONObject().apply {
+                    put("status", "failed")
+                    put("error", e.message ?: "Status unavailable")
+                }.toString()
+            )
         }
     }
 
