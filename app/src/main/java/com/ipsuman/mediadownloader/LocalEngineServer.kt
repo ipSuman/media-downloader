@@ -27,6 +27,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     private val executor = Executors.newCachedThreadPool()
     private val jobs = ConcurrentHashMap<String, File>()
     @Volatile private var engineReady = false
+    @Volatile private var updateAttempted = false
 
     private fun log(message: String, error: Throwable? = null) {
         val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
@@ -47,7 +48,27 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             FFmpeg.getInstance().init(context.applicationContext)
             engineReady = true
         }
-        val version = try { YoutubeDL.getInstance().version(context) ?: "unknown" } catch (_: Exception) { "unknown" }
+
+        // youtubedl-android 0.17.3 contains a built-in updater for the actual
+        // yt-dlp executable. This updates only yt-dlp, not the Android wrapper
+        // or its embedded Python/FFmpeg runtime.
+        if (!updateAttempted) {
+            updateAttempted = true
+            try {
+                log("Checking for latest stable yt-dlp binary")
+                val updateStatus = YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext)
+                log("yt-dlp update result: $updateStatus")
+            } catch (e: Exception) {
+                // Keep the bundled binary if the update server is unreachable.
+                log("yt-dlp update check failed; keeping bundled binary", e)
+            }
+        }
+
+        val version = try {
+            YoutubeDL.getInstance().version(context) ?: "bundled"
+        } catch (_: Exception) {
+            "bundled"
+        }
         log("Android yt-dlp engine ready: $version")
         return version
     }
