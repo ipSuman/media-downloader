@@ -1,4 +1,7 @@
 import json
+import os
+import re
+import time
 
 import yt_dlp
 
@@ -65,3 +68,119 @@ def analyze(url):
 
 def analyze_json(url):
     return json.dumps(analyze(url), ensure_ascii=False)
+
+
+def _write_progress(progress_path, **values):
+    data = {"status": "working"}
+    data.update(values)
+    try:
+        tmp = progress_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False)
+        os.replace(tmp, progress_path)
+    except Exception:
+        pass
+
+
+def _safe_job_id(job_id):
+    return re.sub(r"[^A-Za-z0-9_-]", "", str(job_id)) or "job"
+
+
+def download(url, output_dir, format_selector="", audio_only=False, job_id="job"):
+    """Download one directly available stream with yt-dlp.
+
+    This first download milestone intentionally avoids FFmpeg.  When the UI
+    requests a selector that requires merging (for example bv*+ba), we fall
+    back to a single combined audio+video format so the APK remains usable
+    without a native FFmpeg library.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("URL is required")
+
+    output_dir = os.path.abspath(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    job_id = _safe_job_id(job_id)
+    progress_path = os.path.join(output_dir, "progress.json")
+
+    _write_progress(progress_path, status="starting", percent=0)
+
+    if audio_only:
+        selector = "bestaudio/best"
+    else:
+        selector = str(format_selector or "").strip()
+        if not selector or "+" in selector or selector in ("bv*+ba/b", "bestvideo+bestaudio/best"):
+            selector = "best[vcodec!=none][acodec!=none]/best"
+
+    def hook(data):
+        state = data.get("status")
+        if state == "downloading":
+            total = data.get("total_bytes") or data.get("total_bytes_estimate")
+            current = data.get("downloaded_bytes") or 0
+            percent = (current * 100.0 / total) if total else None
+            speed = data.get("speed")
+            eta = data.get("eta")
+            _write_progress(
+                progress_path,
+                status="downloading",
+                percent=percent,
+                speed=f"{speed / 1024 / 1024:.2f} MB/s" if speed else None,
+                eta=eta,
+            )
+        elif state == "finished":
+            _write_progress(progress_path, status="processing", percent=100)
+
+    options = {
+        "format": selector,
+        "outtmpl": os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "progress_hooks": [hook],
+        "retries": 3,
+        "continuedl": True,
+        "overwrites": False,
+    }
+
+    if audio_only:
+        # No post-processing here: this is a direct audio stream download.
+        options["format"] = "bestaudio/best"
+
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url.strip(), download=True)
+            prepared = ydl.prepare_filename(info)
+
+        candidates = []
+        if os.path.isfile(prepared):
+            candidates.append(prepared)
+        base, _ = os.path.splitext(prepared)
+        for name in os.listdir(output_dir):
+            path = os.path.join(output_dir, name)
+            if os.path.isfile(path) and (name == os.path.basename(prepared) or name.startswith(os.path.basename(base))):
+                candidates.append(path)
+
+        candidates = list(dict.fromkeys(candidates))
+        if not candidates:
+            raise FileNotFoundError("yt-dlp completed but no output file was found")
+
+        output_file = max(candidates, key=os.path.getmtime)
+        size = os.path.getsize(output_file)
+        _write_progress(progress_path, status="completed", percent=100, size=size, filename=os.path.basename(output_file))
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "path": output_file,
+            "filename": os.path.basename(output_file),
+            "size": size,
+            "format": selector,
+        }
+    except Exception as exc:
+        _write_progress(progress_path, status="failed", percent=0, error=str(exc))
+        raise
+
+
+def download_json(url, output_dir, format_selector="", audio_only=False, job_id="job"):
+    return json.dumps(
+        download(url, output_dir, format_selector, audio_only, job_id),
+        ensure_ascii=False,
+    )
