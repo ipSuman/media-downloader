@@ -92,14 +92,22 @@ Example:
 {
   "url": "https://example.com/video",
   "format": "bv*+ba/b",
-  "start": "",
-  "end": "",
+  "start": "00:01:30",
+  "end": "00:03:45",
   "audio_only": false,
   "audio_format": "",
   "subtitles": false,
   "thumbnail": false,
   "metadata": false
 }
+
+When both `start` and `end` are supplied, the Android engine translates them to yt-dlp's download-section operation:
+
+`--download-sections "*START-END"`
+
+and enables `--force-keyframes-at-cuts` for accurate output cuts.
+
+If either value is empty, the full media is downloaded.
 
 Response:
 
