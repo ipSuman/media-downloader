@@ -14,8 +14,8 @@ android {
         applicationId = "com.ipsuman.mediadownloader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         ndk {
           abiFilters += listOf("arm64-v8a")
         }
@@ -75,4 +75,7 @@ dependencies {
 
     // Embedded local HTTP server
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+
+    // Bundled FFmpeg used by yt-dlp for stream merging and audio conversion.
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.17.3")
 }
