@@ -7,6 +7,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import com.chaquo.python.Python
 import fi.iki.elonen.NanoHTTPD
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -64,6 +65,10 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         return response
     }
 
+    private fun jsonResponse(status: Response.Status, body: String): Response {
+        return newFixedLengthResponse(status, "application/json; charset=utf-8", body)
+    }
+
     private fun pythonStatus(): String {
         log("Checking yt-dlp Python engine")
         return try {
@@ -86,9 +91,45 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             {
               "ytdlp": {"installed": "Error", "latest": "Unknown"},
               "ffmpeg": {"installed": "Not installed", "latest": "Unknown"},
-              "error": "${e.message ?: "Python engine error"}"
+              "error": "${JSONObject.quote(e.message ?: "Python engine error")}" 
             }
-            """.trimIndent()
+            """.trimIndent().replace("\"${JSONObject.quote(e.message ?: "Python engine error")}\"", JSONObject.quote(e.message ?: "Python engine error"))
+        }
+    }
+
+    private fun analyzeUrl(session: IHTTPSession): Response {
+        return try {
+            val files = HashMap<String, String>()
+            session.parseBody(files)
+            val body = files["postData"] ?: "{}"
+            val request = JSONObject(body)
+            val url = request.optString("url", "").trim()
+
+            if (url.isEmpty()) {
+                return jsonResponse(
+                    Response.Status.BAD_REQUEST,
+                    """{"ok":false,"error":"URL is required"}"""
+                )
+            }
+
+            log("Analyzing URL: $url")
+
+            val py = Python.getInstance()
+            val engine = py.getModule("engine")
+            val result = engine.callAttr("analyze_json", url).toString()
+
+            log("URL analysis completed")
+            jsonResponse(Response.Status.OK, result)
+        } catch (e: Exception) {
+            log("URL analysis FAILED", e)
+            exportLogToDownloads()
+            jsonResponse(
+                Response.Status.INTERNAL_ERROR,
+                JSONObject().apply {
+                    put("ok", false)
+                    put("error", e.message ?: "Unable to analyze URL")
+                }.toString()
+            )
         }
     }
 
@@ -96,18 +137,34 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         if (session.method == Method.OPTIONS) {
             return cors(newFixedLengthResponse(Response.Status.OK, "text/plain", ""))
         }
+
         val response = when {
             session.method == Method.GET && session.uri == "/api/status" ->
-                newFixedLengthResponse(Response.Status.OK, "application/json", """
-                    {"ok":true,"engine":"media-downloader","platform":"android","version":"0.1.0"}
-                """.trimIndent())
+                jsonResponse(
+                    Response.Status.OK,
+                    """{"ok":true,"engine":"media-downloader","platform":"android","version":"0.1.0"}"""
+                )
+
             session.method == Method.GET && session.uri == "/api/versions" ->
-                newFixedLengthResponse(Response.Status.OK, "application/json", pythonStatus())
+                jsonResponse(Response.Status.OK, pythonStatus())
+
+            session.method == Method.POST && session.uri == "/api/analyze" ->
+                analyzeUrl(session)
+
             session.method == Method.GET && session.uri == "/api/log" ->
-                newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", if (logFile.exists()) logFile.readText() else "No diagnostic log yet.")
+                newFixedLengthResponse(
+                    Response.Status.OK,
+                    "text/plain; charset=utf-8",
+                    if (logFile.exists()) logFile.readText() else "No diagnostic log yet."
+                )
+
             else ->
-                newFixedLengthResponse(Response.Status.NOT_FOUND, "application/json", """{"ok":false,"error":"Endpoint not found"}""")
+                jsonResponse(
+                    Response.Status.NOT_FOUND,
+                    """{"ok":false,"error":"Endpoint not found"}"""
+                )
         }
+
         return cors(response)
     }
 }
