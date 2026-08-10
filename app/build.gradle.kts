@@ -75,7 +75,4 @@ dependencies {
 
     // Embedded local HTTP server
     implementation("org.nanohttpd:nanohttpd:2.3.1")
-
-    // Maintained FFmpegKit fork, LGPL FFmpeg 8.1 LTS
-    implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7")
 }
