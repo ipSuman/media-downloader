@@ -56,7 +56,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun injectSelectionBridge() {
         try {
-            val scripts = listOf("theme.js", "selection-bridge.js")
+            val scripts = listOf("theme.js", "selection-bridge.js", "cut-input-fix.js")
             for (scriptName in scripts) {
                 val script = assets.open(scriptName)
                     .bufferedReader(Charsets.UTF_8)
