@@ -56,12 +56,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun injectSelectionBridge() {
         try {
-            val script = assets.open("selection-bridge.js")
-                .bufferedReader(Charsets.UTF_8)
-                .use { it.readText() }
-            webView.evaluateJavascript(script, null)
+            val scripts = listOf("theme.js", "selection-bridge.js")
+            for (scriptName in scripts) {
+                val script = assets.open(scriptName)
+                    .bufferedReader(Charsets.UTF_8)
+                    .use { it.readText() }
+                webView.evaluateJavascript(script, null)
+            }
         } catch (e: Exception) {
-            android.util.Log.e("MediaDownloader", "Could not inject selection bridge", e)
+            android.util.Log.e("MediaDownloader", "Could not inject WebView bridge/theme", e)
         }
     }
 
