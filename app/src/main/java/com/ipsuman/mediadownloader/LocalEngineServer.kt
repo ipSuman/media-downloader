@@ -9,13 +9,20 @@ import com.chaquo.python.Python
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
 class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
 
     private val logFile: File = File(context.filesDir, "media-downloader-engine.log")
+    private val executor = Executors.newCachedThreadPool()
+    private val jobs = ConcurrentHashMap<String, File>()
 
     private fun log(message: String, throwable: Throwable? = null) {
         val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
@@ -78,22 +85,30 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             log("Imported Python module: engine")
             val version = engine.callAttr("get_version").toString()
             log("yt-dlp version detected: $version")
-            """
-            {
-              "ytdlp": {"installed": "$version", "latest": "$version"},
-              "ffmpeg": {"installed": "Not installed", "latest": "Unknown"}
-            }
-            """.trimIndent()
+            JSONObject().apply {
+                put("ytdlp", JSONObject().apply {
+                    put("installed", version)
+                    put("latest", version)
+                })
+                put("ffmpeg", JSONObject().apply {
+                    put("installed", "Not installed")
+                    put("latest", "Unknown")
+                })
+            }.toString()
         } catch (e: Exception) {
             log("yt-dlp engine check FAILED", e)
             exportLogToDownloads()
-            """
-            {
-              "ytdlp": {"installed": "Error", "latest": "Unknown"},
-              "ffmpeg": {"installed": "Not installed", "latest": "Unknown"},
-              "error": "${JSONObject.quote(e.message ?: "Python engine error")}" 
-            }
-            """.trimIndent().replace("\"${JSONObject.quote(e.message ?: "Python engine error")}\"", JSONObject.quote(e.message ?: "Python engine error"))
+            JSONObject().apply {
+                put("ytdlp", JSONObject().apply {
+                    put("installed", "Error")
+                    put("latest", "Unknown")
+                })
+                put("ffmpeg", JSONObject().apply {
+                    put("installed", "Not installed")
+                    put("latest", "Unknown")
+                })
+                put("error", e.message ?: "Python engine error")
+            }.toString()
         }
     }
 
@@ -113,11 +128,9 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             }
 
             log("Analyzing URL: $url")
-
             val py = Python.getInstance()
             val engine = py.getModule("engine")
             val result = engine.callAttr("analyze_json", url).toString()
-
             log("URL analysis completed")
             jsonResponse(Response.Status.OK, result)
         } catch (e: Exception) {
@@ -130,6 +143,168 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     put("error", e.message ?: "Unable to analyze URL")
                 }.toString()
             )
+        }
+    }
+
+    private fun startDownload(session: IHTTPSession): Response {
+        return try {
+            val files = HashMap<String, String>()
+            session.parseBody(files)
+            val body = files["postData"] ?: "{}"
+            val request = JSONObject(body)
+            val url = request.optString("url", "").trim()
+            if (url.isEmpty()) {
+                return jsonResponse(Response.Status.BAD_REQUEST, """{"ok":false,"error":"URL is required"}""")
+            }
+
+            val jobId = UUID.randomUUID().toString().replace("-", "").take(12)
+            val jobDir = File(context.cacheDir, "media-downloads/$jobId")
+            if (!jobDir.mkdirs() && !jobDir.isDirectory) {
+                throw IllegalStateException("Could not create temporary download directory")
+            }
+            jobs[jobId] = jobDir
+
+            val format = request.optString("format", "")
+            val audioOnly = request.optBoolean("audio_only", false)
+
+            log("Starting download job $jobId: $url")
+
+            executor.execute {
+                try {
+                    val py = Python.getInstance()
+                    val engine = py.getModule("engine")
+                    val resultJson = engine.callAttr(
+                        "download_json",
+                        url,
+                        jobDir.absolutePath,
+                        format,
+                        audioOnly,
+                        jobId
+                    ).toString()
+                    val result = JSONObject(resultJson)
+                    val sourcePath = File(result.getString("path"))
+                    val destination = saveToDownloads(
+                        sourcePath,
+                        result.optString("filename", sourcePath.name)
+                    )
+                    JSONObject().apply {
+                        put("status", "completed")
+                        put("percent", 100)
+                        put("filename", destination.first)
+                        put("uri", destination.second)
+                        put("size", result.optLong("size", sourcePath.length()))
+                    }.toString().also { writeJobStatus(jobDir, it) }
+                    log("Download job $jobId completed: ${destination.first}")
+                    sourcePath.delete()
+                } catch (e: Exception) {
+                    log("Download job $jobId FAILED", e)
+                    writeJobStatus(
+                        jobDir,
+                        JSONObject().apply {
+                            put("status", "failed")
+                            put("percent", 0)
+                            put("error", e.message ?: "Download failed")
+                        }.toString()
+                    )
+                }
+            }
+
+            writeJobStatus(jobDir, """{"status":"starting","percent":0}""")
+            jsonResponse(
+                Response.Status.OK,
+                JSONObject().apply {
+                    put("ok", true)
+                    put("job_id", jobId)
+                }.toString()
+            )
+        } catch (e: Exception) {
+            log("Could not start download", e)
+            jsonResponse(
+                Response.Status.INTERNAL_ERROR,
+                JSONObject().apply {
+                    put("ok", false)
+                    put("error", e.message ?: "Unable to start download")
+                }.toString()
+            )
+        }
+    }
+
+    private fun writeJobStatus(jobDir: File, json: String) {
+        try {
+            File(jobDir, "android_status.json").writeText(json)
+        } catch (e: Exception) {
+            log("Could not write job status", e)
+        }
+    }
+
+    private fun saveToDownloads(source: File, requestedName: String): Pair<String, String> {
+        if (!source.exists()) throw IllegalStateException("Downloaded file does not exist")
+
+        val cleanName = requestedName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val resolver = context.contentResolver
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, cleanName)
+                put(MediaStore.Downloads.MIME_TYPE, mimeType(cleanName))
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("Could not create Downloads entry")
+            try {
+                resolver.openOutputStream(uri)?.use { output ->
+                    FileInputStream(source).use { input -> input.copyTo(output) }
+                } ?: throw IllegalStateException("Could not open Downloads output")
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                return Pair(cleanName, uri.toString())
+            } catch (e: Exception) {
+                resolver.delete(uri, null, null)
+                throw e
+            }
+        }
+
+        val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!downloads.exists()) downloads.mkdirs()
+        val target = File(downloads, cleanName)
+        FileInputStream(source).use { input ->
+            FileOutputStream(target).use { output -> input.copyTo(output) }
+        }
+        return Pair(target.name, target.toURI().toString())
+    }
+
+    private fun mimeType(name: String): String {
+        return when (name.substringAfterLast('.', "").lowercase(Locale.US)) {
+            "mp4", "m4v" -> "video/mp4"
+            "webm" -> "video/webm"
+            "mkv" -> "video/x-matroska"
+            "mp3" -> "audio/mpeg"
+            "m4a" -> "audio/mp4"
+            "opus" -> "audio/opus"
+            "ogg" -> "audio/ogg"
+            "flac" -> "audio/flac"
+            else -> "application/octet-stream"
+        }
+    }
+
+    private fun downloadStatus(jobId: String): Response {
+        val jobDir = jobs[jobId]
+            ?: return jsonResponse(Response.Status.NOT_FOUND, """{"ok":false,"error":"Unknown job"}""")
+
+        val progressFile = File(jobDir, "progress.json")
+        val androidStatus = File(jobDir, "android_status.json")
+
+        return try {
+            val raw = when {
+                androidStatus.exists() -> androidStatus.readText()
+                progressFile.exists() -> progressFile.readText()
+                else -> """{"status":"starting","percent":0}"""
+            }
+            jsonResponse(Response.Status.OK, raw)
+        } catch (e: Exception) {
+            jsonResponse(Response.Status.INTERNAL_ERROR, """{"status":"failed","error":"${JSONObject.quote(e.message ?: "Status unavailable")}"}""")
         }
     }
 
@@ -151,6 +326,12 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             session.method == Method.POST && session.uri == "/api/analyze" ->
                 analyzeUrl(session)
 
+            session.method == Method.POST && session.uri == "/api/download" ->
+                startDownload(session)
+
+            session.method == Method.GET && session.uri.startsWith("/api/download/") ->
+                downloadStatus(session.uri.substringAfterLast('/'))
+
             session.method == Method.GET && session.uri == "/api/log" ->
                 newFixedLengthResponse(
                     Response.Status.OK,
@@ -166,5 +347,10 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         }
 
         return cors(response)
+    }
+
+    override fun stop() {
+        executor.shutdownNow()
+        super.stop()
     }
 }
