@@ -44,10 +44,6 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         android.util.Log.e("MediaDownloader", message, throwable)
     }
 
-    /**
-     * Initialize the same Android yt-dlp + FFmpeg stack used by Seal.
-     * This is lazy so the app can display the WebView immediately.
-     */
     @Synchronized
     private fun ensureAndroidYtDlp(): String {
         if (androidYtDlpReady) {
@@ -277,13 +273,16 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     log("Download job $jobId completed: ${destination.first}")
                     sourcePath.delete()
                 } catch (e: Exception) {
-                    log("Download job $jobId FAILED", e)
+                    val errorMessage = buildDiagnosticMessage(e)
+                    log("Download job $jobId FAILED: $errorMessage", e)
+                    exportLogToDownloads()
                     writeJobStatus(
                         jobDir,
                         JSONObject().apply {
-                            put("status", "failed")
+                            put("status", "failed: $errorMessage")
                             put("percent", 0)
-                            put("error", e.message ?: "Download failed")
+                            put("error", errorMessage)
+                            put("exception", e::class.java.name)
                         }.toString()
                     )
                 }
@@ -297,15 +296,37 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 }.toString()
             )
         } catch (e: Exception) {
-            log("Could not start download", e)
+            val errorMessage = buildDiagnosticMessage(e)
+            log("Could not start download: $errorMessage", e)
+            exportLogToDownloads()
             jsonResponse(
                 Response.Status.INTERNAL_ERROR,
                 JSONObject().apply {
                     put("ok", false)
-                    put("error", e.message ?: "Unable to start download")
+                    put("error", errorMessage)
+                    put("exception", e::class.java.name)
                 }.toString()
             )
         }
+    }
+
+    private fun buildDiagnosticMessage(error: Throwable): String {
+        val parts = ArrayList<String>()
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth < 4) {
+            val message = current.message?.trim().orEmpty()
+            if (message.isNotEmpty()) {
+                parts += "${current::class.java.simpleName}: $message"
+            } else {
+                parts += current::class.java.simpleName
+            }
+            current = current.cause
+            depth++
+        }
+        return parts.joinToString(" | ")
+            .replace(Regex("\\s+"), " ")
+            .take(1200)
     }
 
     private fun findDownloadedFile(jobDir: File): File? {
@@ -392,11 +413,13 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             }
             jsonResponse(Response.Status.OK, raw)
         } catch (e: Exception) {
+            val errorMessage = buildDiagnosticMessage(e)
             jsonResponse(
                 Response.Status.INTERNAL_ERROR,
                 JSONObject().apply {
-                    put("status", "failed")
-                    put("error", e.message ?: "Status unavailable")
+                    put("status", "failed: $errorMessage")
+                    put("error", errorMessage)
+                    put("exception", e::class.java.name)
                 }.toString()
             )
         }
