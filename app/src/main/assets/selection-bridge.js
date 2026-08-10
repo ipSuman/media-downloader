@@ -1,7 +1,32 @@
 (function () {
   "use strict";
 
+  const ENGINE_PORTS = [8765, 8787, 8080];
+  let localEngineBase = null;
+
   function byId(id) { return document.getElementById(id); }
+
+  async function findEngine() {
+    for (const port of ENGINE_PORTS) {
+      const base = `http://127.0.0.1:${port}/api`;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1200);
+        const response = await fetch(`${base}/status`, {
+          method: "GET",
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (!response.ok) continue;
+        const data = await response.json();
+        if (data.ok) {
+          localEngineBase = base;
+          return true;
+        }
+      } catch (_) {}
+    }
+    return false;
+  }
 
   function currentMode() {
     if (!byId("audioOptions").classList.contains("hidden")) return "audio";
@@ -26,8 +51,6 @@
     }
   }
 
-  // Replace the placeholder implementation with a version that reads the
-  // actual controls before sending the request to the local engine.
   window.addDownload = async function () {
     const url = byId("url").value.trim();
     if (!url) {
@@ -35,12 +58,9 @@
       return;
     }
 
-    if (!window.engineBase) {
-      const found = await window.discoverEngine();
-      if (!found) {
-        alert("Local engine is not running yet.");
-        return;
-      }
+    if (!localEngineBase && !(await findEngine())) {
+      alert("Local engine is not running yet.");
+      return;
     }
 
     const mode = currentMode();
@@ -90,7 +110,7 @@
     queue.appendChild(item);
 
     try {
-      const response = await fetch(`${window.engineBase}/download`, {
+      const response = await fetch(`${localEngineBase}/download`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -116,14 +136,14 @@
       item.querySelector(".queue-status").textContent =
         `Queued • ${mode}${audioFormat ? " • " + audioFormat : ""}${format ? " • " + format : ""} • Job ${data.job_id}`;
 
-      window.monitorDownload(data.job_id, item);
+      if (typeof window.monitorDownload === "function") {
+        window.monitorDownload(data.job_id, item);
+      }
     } catch (error) {
       item.querySelector(".queue-status").textContent = `❌ ${error.message || "Failed to start"}`;
       console.error(error);
     }
   };
 
-  // Expose existing functions so the bridge can call them even if the
-  // original page implementation is changed later.
   window._mediaDownloaderSelectionBridge = true;
 })();
