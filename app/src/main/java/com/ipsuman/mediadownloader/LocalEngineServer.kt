@@ -49,9 +49,6 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             engineReady = true
         }
 
-        // youtubedl-android 0.17.3 contains a built-in updater for the actual
-        // yt-dlp executable. This updates only yt-dlp, not the Android wrapper
-        // or its embedded Python/FFmpeg runtime.
         if (!updateAttempted) {
             updateAttempted = true
             try {
@@ -59,7 +56,6 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 val updateStatus = YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext)
                 log("yt-dlp update result: $updateStatus")
             } catch (e: Exception) {
-                // Keep the bundled binary if the update server is unreachable.
                 log("yt-dlp update check failed; keeping bundled binary", e)
             }
         }
@@ -180,11 +176,13 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             jobs[jobId] = dir
             writeStatus(dir, """{"status":"starting","percent":0}""")
             val format = req.optString("format", "").trim()
+            val start = req.optString("start", "").trim()
+            val end = req.optString("end", "").trim()
             val audioOnly = req.optBoolean("audio_only", false)
             val audioFormat = req.optString("audio_format", "").trim().lowercase(Locale.US)
             val audioQuality = req.optString("audio_quality", "").trim()
             val container = req.optString("merge_output_format", "").trim()
-            log("Starting download $jobId: format=$format audioOnly=$audioOnly")
+            log("Starting download $jobId: format=$format audioOnly=$audioOnly section=$start-$end")
             executor.execute {
                 try {
                     ensureEngine()
@@ -193,6 +191,10 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                         addOption("--no-mtime"); addOption("--no-playlist"); addOption("--retries", "3")
                         addOption("--fragment-retries", "3"); addOption("--socket-timeout", "30"); addOption("--force-ipv4")
                         addOption("-f", if (format.isNotEmpty()) format else if (audioOnly) "bestaudio/best" else "bv*+ba/b")
+                        if (start.isNotEmpty() && end.isNotEmpty()) {
+                            addOption("--download-sections", "*$start-$end")
+                            addOption("--force-keyframes-at-cuts")
+                        }
                         if (container.isNotEmpty() && container != "auto") addOption("--merge-output-format", container)
                         if (audioOnly) {
                             addOption("-x")
