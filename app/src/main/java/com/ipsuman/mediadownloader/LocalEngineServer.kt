@@ -167,8 +167,11 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
 
             val format = request.optString("format", "")
             val audioOnly = request.optBoolean("audio_only", false)
+            val audioFormat = request.optString("audio_format", "")
+            val audioQuality = request.optString("audio_quality", "")
+            val mergeOutputFormat = request.optString("merge_output_format", "")
 
-            log("Starting download job $jobId: $url")
+            log("Starting download job $jobId: $url | format=$format | audioOnly=$audioOnly | audioFormat=$audioFormat | audioQuality=$audioQuality | container=$mergeOutputFormat")
 
             executor.execute {
                 try {
@@ -180,7 +183,10 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                         jobDir.absolutePath,
                         format,
                         audioOnly,
-                        jobId
+                        jobId,
+                        audioFormat,
+                        audioQuality,
+                        mergeOutputFormat
                     ).toString()
                     val result = JSONObject(resultJson)
                     val sourcePath = File(result.getString("path"))
