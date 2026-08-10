@@ -3,6 +3,7 @@
 
   const ENGINE_PORTS = [8765, 8787, 8080];
   let localEngineBase = null;
+  let cutSection = null;
 
   function byId(id) { return document.getElementById(id); }
 
@@ -12,17 +13,11 @@
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 1200);
-        const response = await fetch(`${base}/status`, {
-          method: "GET",
-          signal: controller.signal
-        });
+        const response = await fetch(`${base}/status`, { method: "GET", signal: controller.signal });
         clearTimeout(timeout);
         if (!response.ok) continue;
         const data = await response.json();
-        if (data.ok) {
-          localEngineBase = base;
-          return true;
-        }
+        if (data.ok) { localEngineBase = base; return true; }
       } catch (_) {}
     }
     return false;
@@ -51,17 +46,68 @@
     }
   }
 
+  function timeToSeconds(value) {
+    const parts = String(value || "").trim().split(":");
+    if (!parts.length || parts.length > 3 || parts.some(p => !/^\d+(\.\d+)?$/.test(p))) return NaN;
+    let seconds = 0;
+    for (const p of parts) seconds = seconds * 60 + Number(p);
+    return seconds;
+  }
+
+  function formatTime(value) {
+    const total = Math.max(0, Math.floor(value));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return [h, m, s].map((v, i) => i === 0 ? String(v).padStart(2, "0") : String(v).padStart(2, "0")).join(":");
+  }
+
+  function installCutButton() {
+    const grid = document.querySelector(".time-grid");
+    if (!grid || document.getElementById("cutSectionButton")) return;
+
+    const button = document.createElement("button");
+    button.id = "cutSectionButton";
+    button.type = "button";
+    button.textContent = "✂ Cut Section";
+    button.style.cssText = "width:100%;margin-top:10px;padding:12px;border:1px solid var(--accent);border-radius:12px;background:#112421;color:var(--accent);font-weight:900;";
+
+    button.onclick = () => {
+      const inputs = grid.querySelectorAll("input");
+      const start = inputs[0]?.value.trim() || "";
+      const end = inputs[1]?.value.trim() || "";
+      const startSeconds = timeToSeconds(start);
+      const endSeconds = timeToSeconds(end);
+
+      if (!start || !end || !Number.isFinite(startSeconds) || !Number.isFinite(endSeconds)) {
+        alert("Enter both Start and End times first. Example: 00:01:30 and 00:03:45");
+        return;
+      }
+      if (startSeconds < 0 || endSeconds <= startSeconds) {
+        alert("End time must be greater than Start time.");
+        return;
+      }
+
+      const normalizedStart = formatTime(startSeconds);
+      const normalizedEnd = formatTime(endSeconds);
+      inputs[0].value = normalizedStart;
+      inputs[1].value = normalizedEnd;
+      cutSection = { start: normalizedStart, end: normalizedEnd };
+      button.textContent = `✂ Section Set: ${normalizedStart} → ${normalizedEnd}`;
+      button.style.background = "#17342f";
+    };
+
+    grid.parentNode.insertBefore(button, grid.nextSibling);
+  }
+
+  window.addEventListener("load", installCutButton);
+  setTimeout(installCutButton, 50);
+  setTimeout(installCutButton, 500);
+
   window.addDownload = async function () {
     const url = byId("url").value.trim();
-    if (!url) {
-      alert("Analyze a URL first.");
-      return;
-    }
-
-    if (!localEngineBase && !(await findEngine())) {
-      alert("Local engine is not running yet.");
-      return;
-    }
+    if (!url) { alert("Analyze a URL first."); return; }
+    if (!localEngineBase && !(await findEngine())) { alert("Local engine is not running yet."); return; }
 
     const mode = currentMode();
     let format = "bv*+ba/b";
@@ -90,6 +136,7 @@
     const timeInputs = document.querySelectorAll(".time-grid input");
     const start = timeInputs[0]?.value.trim() || "";
     const end = timeInputs[1]?.value.trim() || "";
+    const section = cutSection && start && end ? cutSection : null;
 
     const checks = document.querySelectorAll(".checks input[type=checkbox]");
     const subtitles = !!checks[0]?.checked;
@@ -116,8 +163,8 @@
         body: JSON.stringify({
           url,
           format,
-          start,
-          end,
+          start: section?.start || "",
+          end: section?.end || "",
           audio_only: audioOnly,
           audio_format: audioFormat,
           audio_quality: audioQuality,
@@ -129,16 +176,12 @@
       });
 
       const data = await response.json();
-      if (!response.ok || !data.ok) {
-        throw new Error(data.error || "Download request failed");
-      }
+      if (!response.ok || !data.ok) throw new Error(data.error || "Download request failed");
 
       item.querySelector(".queue-status").textContent =
-        `Queued • ${mode}${audioFormat ? " • " + audioFormat : ""}${format ? " • " + format : ""} • Job ${data.job_id}`;
+        `Queued • ${mode}${audioFormat ? " • " + audioFormat : ""}${section ? ` • ✂ ${section.start} → ${section.end}` : ""} • Job ${data.job_id}`;
 
-      if (typeof window.monitorDownload === "function") {
-        window.monitorDownload(data.job_id, item);
-      }
+      if (typeof window.monitorDownload === "function") window.monitorDownload(data.job_id, item);
     } catch (error) {
       item.querySelector(".queue-status").textContent = `❌ ${error.message || "Failed to start"}`;
       console.error(error);
