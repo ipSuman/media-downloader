@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 injectSelectionBridge()
                 sendSelectedFolderToWeb()
+                installSettingsNativeFallback()
             }
         }
 
@@ -64,20 +65,50 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openFolderPicker() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+    // Safety net: if the WebView-side Settings handler fails to install,
+    // tapping the gear still opens the Android folder picker.
+    private fun installSettingsNativeFallback() {
+        webView.postDelayed({
+            webView.evaluateJavascript(
+                """
+                (function(){
+                  var b=document.querySelector('.settings');
+                  if(!b || b.dataset.nativeFolderFallback==='1') return;
+                  b.dataset.nativeFolderFallback='1';
+                  b.addEventListener('click',function(){
+                    setTimeout(function(){
+                      var overlay=document.getElementById('mdSettingsOverlay');
+                      if(!overlay || !overlay.classList.contains('show')){
+                        try{ if(window.Android && typeof window.Android.chooseDownloadFolder==='function') window.Android.chooseDownloadFolder(); }catch(e){}
+                      }
+                    },120);
+                  },false);
+                })();
+                """.trimIndent(),
+                null
+            )
+        }, 250)
+    }
 
-            prefs.getString("download_tree_uri", null)?.let {
-                try {
-                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(it))
-                } catch (_: Exception) {}
+    private fun openFolderPicker() {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+
+                prefs.getString("download_tree_uri", null)?.let {
+                    try {
+                        putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(it))
+                    } catch (_: Exception) {}
+                }
             }
+            android.util.Log.d("MediaDownloader", "Opening folder picker")
+            startActivityForResult(intent, folderPickerRequestCode)
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Could not open folder picker", e)
         }
-        startActivityForResult(intent, folderPickerRequestCode)
     }
 
     private fun sendSelectedFolderToWeb() {
