@@ -72,6 +72,12 @@
     button.textContent = "✂ Cut Section";
     button.style.cssText = "width:100%;margin-top:10px;padding:12px;border:1px solid var(--accent);border-radius:12px;background:#112421;color:var(--accent);font-weight:900;";
 
+    const toggle = document.createElement("button");
+    toggle.id = "cutSectionToggle";
+    toggle.type = "button";
+    toggle.textContent = "✂ Cut: OFF";
+    toggle.style.cssText = "width:100%;margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--card2);color:var(--muted);font-weight:900;";
+
     button.onclick = () => {
       const inputs = grid.querySelectorAll("input");
       const start = inputs[0]?.value.trim() || "";
@@ -95,9 +101,44 @@
       cutSection = { start: normalizedStart, end: normalizedEnd };
       button.textContent = `✂ Section Set: ${normalizedStart} → ${normalizedEnd}`;
       button.style.background = "#17342f";
+      toggle.textContent = "✂ Cut: ON";
+      toggle.style.color = "var(--accent)";
+      toggle.style.borderColor = "#286d63";
+      toggle.style.background = "#112421";
+    };
+
+    toggle.onclick = () => {
+      if (cutSection) {
+        cutSection = null;
+        toggle.textContent = "✂ Cut: OFF";
+        toggle.style.color = "var(--muted)";
+        toggle.style.borderColor = "var(--border)";
+        toggle.style.background = "var(--card2)";
+        button.textContent = "✂ Cut Section";
+        button.style.background = "#112421";
+        return;
+      }
+
+      const inputs = grid.querySelectorAll("input");
+      const start = inputs[0]?.value.trim() || "";
+      const end = inputs[1]?.value.trim() || "";
+      const startSeconds = timeToSeconds(start);
+      const endSeconds = timeToSeconds(end);
+      if (!start || !end || !Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || endSeconds <= startSeconds) {
+        alert("Enter a valid Start and End time first.");
+        return;
+      }
+      cutSection = { start: formatTime(startSeconds), end: formatTime(endSeconds) };
+      toggle.textContent = "✂ Cut: ON";
+      toggle.style.color = "var(--accent)";
+      toggle.style.borderColor = "#286d63";
+      toggle.style.background = "#112421";
+      button.textContent = `✂ Section Set: ${cutSection.start} → ${cutSection.end}`;
+      button.style.background = "#17342f";
     };
 
     grid.parentNode.insertBefore(button, grid.nextSibling);
+    button.parentNode.insertBefore(toggle, button.nextSibling);
   }
 
   function installSettings() {
@@ -150,22 +191,33 @@
     document.body.appendChild(overlay);
 
     const close = () => overlay.classList.remove("show");
-    button.onclick = () => {
+    const openSettings = (event) => {
+      if (event) event.preventDefault();
       updateFolderLabel();
       overlay.classList.add("show");
     };
+    button.onclick = openSettings;
+    button.ontouchend = (event) => { event.preventDefault(); openSettings(event); };
     overlay.querySelector(".md-close").onclick = close;
     overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
     overlay.querySelector("#mdChooseFolder").onclick = () => {
-      if (window.Android && typeof window.Android.chooseDownloadFolder === "function") {
-        window.Android.chooseDownloadFolder();
-      } else {
-        alert("Folder selection is available inside the Android app.");
+      try {
+        if (window.Android && typeof window.Android.chooseDownloadFolder === "function") {
+          window.Android.chooseDownloadFolder();
+          return;
+        }
+      } catch (error) {
+        console.error("Folder picker bridge failed", error);
       }
+      alert("Folder selection is available inside the Android app.");
     };
     overlay.querySelector("#mdResetFolder").onclick = () => {
-      if (window.Android && typeof window.Android.clearDownloadFolder === "function") {
-        window.Android.clearDownloadFolder();
+      try {
+        if (window.Android && typeof window.Android.clearDownloadFolder === "function") {
+          window.Android.clearDownloadFolder();
+        }
+      } catch (error) {
+        console.error("Folder reset bridge failed", error);
       }
       updateFolderLabel("Downloads");
     };
