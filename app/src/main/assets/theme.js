@@ -19,20 +19,29 @@
 
       /* App name pill */
       .md-app-pill{
-        display:block;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        gap:9px;
         width:max-content;
         max-width:100%;
         margin:0 auto 14px;
-        padding:9px 20px;
-        border:1px solid #3f7f76;
+        padding:7px 16px 7px 9px;
+        border:1px solid #4b5eb1;
         border-radius:999px;
-        background:linear-gradient(135deg,#173c38,#1b2f3a);
-        color:#eafffb;
+        background:linear-gradient(135deg,#101a32,#211d4b);
+        color:#f4f7ff;
         font-size:13px;
         font-weight:950;
-        letter-spacing:1.4px;
+        letter-spacing:1.2px;
         text-align:center;
         box-shadow:0 5px 18px rgba(0,0,0,.25);
+      }
+      .md-app-pill img{
+        width:32px;
+        height:32px;
+        border-radius:9px;
+        flex:0 0 32px;
       }
 
       /* Larger settings button: 1.5x from 42px to 63px */
@@ -48,6 +57,22 @@
         box-shadow:0 5px 18px rgba(0,0,0,.25);
       }
       .settings:active{transform:scale(.96)}
+
+      /* Use the supplied SVG inside the app instead of the old down-arrow */
+      .logo-icon{
+        width:46px!important;
+        height:46px!important;
+        padding:0!important;
+        background:transparent!important;
+        border-radius:14px!important;
+        overflow:hidden!important;
+      }
+      .logo-icon img{
+        width:100%;
+        height:100%;
+        display:block;
+        border-radius:14px;
+      }
 
       /* Colour-coded cards */
       .md-url-card{border-color:#287c72!important;box-shadow:0 5px 22px rgba(53,199,181,.07)}
@@ -71,9 +96,7 @@
         background:#282038!important;
         color:var(--md-purple)!important;
       }
-      .primary{
-        background:var(--md-teal)!important;
-      }
+      .primary{background:var(--md-teal)!important}
       .md-analyze-button{background:var(--md-blue)!important;color:#07131f!important}
       .md-download-button{background:var(--md-orange)!important;color:#241507!important}
 
@@ -135,8 +158,13 @@
 
     const pill = document.createElement("div");
     pill.className = "md-app-pill";
-    pill.textContent = "⬇  MEDIA DOWNLOADER";
+    pill.innerHTML = `<img src="gemini-svg.svg" alt=""> <span>MEDIA DOWNLOADER</span>`;
     app.insertBefore(pill, app.firstChild);
+
+    const logoIcon = document.querySelector(".logo-icon");
+    if (logoIcon) {
+      logoIcon.innerHTML = `<img src="gemini-svg.svg" alt="Media Downloader">`;
+    }
 
     document.querySelectorAll(".app > .card").forEach(card => {
       const title = card.querySelector(".card-title")?.textContent.trim().toLowerCase() || "";
