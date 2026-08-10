@@ -59,7 +59,7 @@
     const h = Math.floor(total / 3600);
     const m = Math.floor((total % 3600) / 60);
     const s = total % 60;
-    return [h, m, s].map((v, i) => i === 0 ? String(v).padStart(2, "0") : String(v).padStart(2, "0")).join(":");
+    return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
   }
 
   function installCutButton() {
@@ -100,9 +100,214 @@
     grid.parentNode.insertBefore(button, grid.nextSibling);
   }
 
-  window.addEventListener("load", installCutButton);
+  function installSettings() {
+    const button = document.querySelector(".settings");
+    if (!button || button.dataset.settingsInstalled) return;
+    button.dataset.settingsInstalled = "1";
+
+    const style = document.createElement("style");
+    style.textContent = `
+      .md-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:flex-end;justify-content:center;z-index:9999;padding:14px}
+      .md-overlay.show{display:flex}
+      .md-settings{width:min(100%,700px);background:var(--card);border:1px solid var(--border);border-radius:20px;padding:18px;box-shadow:0 18px 60px rgba(0,0,0,.45)}
+      .md-settings-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:15px}
+      .md-settings-title{font-size:18px;font-weight:900}
+      .md-close{border:1px solid var(--border);background:var(--card2);color:var(--text);border-radius:11px;width:38px;height:38px;font-size:18px}
+      .md-folder{background:var(--card2);border:1px solid var(--border);border-radius:13px;padding:13px;margin-bottom:12px}
+      .md-folder-name{font-size:13px;font-weight:800;word-break:break-word}
+      .md-folder-path{color:var(--muted);font-size:11px;margin-top:4px}
+      .md-settings-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+      .md-action{padding:12px;border-radius:12px;border:1px solid var(--border);background:var(--card2);color:var(--text);font-weight:800}
+      .md-action.primary{background:var(--accent);color:#061311;border:0;margin:0}
+      .md-download-controls{display:flex;gap:8px;margin-top:10px}
+      .md-download-controls button{flex:1;padding:9px 7px;border-radius:10px;border:1px solid var(--border);font-size:11px;font-weight:900;background:#20292d;color:var(--text)}
+      .md-download-controls .pause{color:var(--accent);border-color:#286d63}
+      .md-download-controls .cancel{color:var(--red);border-color:#713838}
+      .md-progress-line{display:flex;justify-content:space-between;gap:8px;margin-top:7px;font-size:11px;color:var(--muted)}
+      .md-percent{font-weight:900;color:var(--text)}
+    `;
+    document.head.appendChild(style);
+
+    const overlay = document.createElement("div");
+    overlay.className = "md-overlay";
+    overlay.id = "mdSettingsOverlay";
+    overlay.innerHTML = `
+      <div class="md-settings" role="dialog" aria-modal="true">
+        <div class="md-settings-head">
+          <div class="md-settings-title">⚙ Settings</div>
+          <button class="md-close" type="button" aria-label="Close">✕</button>
+        </div>
+        <div class="md-folder">
+          <div class="md-folder-name" id="mdFolderName">Downloads</div>
+          <div class="md-folder-path">Download destination</div>
+        </div>
+        <div class="md-settings-actions">
+          <button class="md-action primary" id="mdChooseFolder">📁 Choose Folder</button>
+          <button class="md-action" id="mdResetFolder">↩ Use Downloads</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.classList.remove("show");
+    button.onclick = () => {
+      updateFolderLabel();
+      overlay.classList.add("show");
+    };
+    overlay.querySelector(".md-close").onclick = close;
+    overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
+    overlay.querySelector("#mdChooseFolder").onclick = () => {
+      if (window.Android && typeof window.Android.chooseDownloadFolder === "function") {
+        window.Android.chooseDownloadFolder();
+      } else {
+        alert("Folder selection is available inside the Android app.");
+      }
+    };
+    overlay.querySelector("#mdResetFolder").onclick = () => {
+      if (window.Android && typeof window.Android.clearDownloadFolder === "function") {
+        window.Android.clearDownloadFolder();
+      }
+      updateFolderLabel("Downloads");
+    };
+
+    window.onNativeFolderSelected = function(uri, name) {
+      updateFolderLabel(name || "Downloads");
+      overlay.classList.add("show");
+    };
+
+    function updateFolderLabel(value) {
+      const el = byId("mdFolderName");
+      if (!el) return;
+      if (value !== undefined) { el.textContent = value || "Downloads"; return; }
+      try {
+        const name = window.Android?.getDownloadFolderName?.();
+        el.textContent = name || "Downloads";
+      } catch (_) {
+        el.textContent = "Downloads";
+      }
+    }
+  }
+
+  function addDownloadControls(item, jobId) {
+    if (item.querySelector(".md-download-controls")) return;
+    const controls = document.createElement("div");
+    controls.className = "md-download-controls";
+    controls.innerHTML = `
+      <button class="pause" type="button">⏸ Pause</button>
+      <button class="cancel" type="button">⛔ Terminate</button>
+    `;
+    item.appendChild(controls);
+
+    const pauseButton = controls.querySelector(".pause");
+    const cancelButton = controls.querySelector(".cancel");
+
+    pauseButton.onclick = async () => {
+      if (!localEngineBase) return;
+      const isPaused = pauseButton.dataset.state === "paused";
+      const action = isPaused ? "resume" : "pause";
+      pauseButton.disabled = true;
+      try {
+        const response = await fetch(`${localEngineBase}/download/${encodeURIComponent(jobId)}/${action}`, { method: "POST" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || `${action} failed`);
+      } catch (error) {
+        alert(error.message || `${action} failed`);
+      } finally {
+        pauseButton.disabled = false;
+      }
+    };
+
+    cancelButton.onclick = async () => {
+      if (!localEngineBase) return;
+      if (!confirm("Terminate this download? The partial file will be discarded.")) return;
+      cancelButton.disabled = true;
+      try {
+        const response = await fetch(`${localEngineBase}/download/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Terminate failed");
+      } catch (error) {
+        cancelButton.disabled = false;
+        alert(error.message || "Terminate failed");
+      }
+    };
+  }
+
+  function updateDownloadControls(item, data) {
+    const controls = item.querySelector(".md-download-controls");
+    if (!controls) return;
+    const pauseButton = controls.querySelector(".pause");
+    const cancelButton = controls.querySelector(".cancel");
+    const status = String(data.status || "").toLowerCase();
+
+    if (status === "paused") {
+      pauseButton.textContent = "▶ Resume";
+      pauseButton.dataset.state = "paused";
+      pauseButton.disabled = false;
+    } else if (status === "completed" || status === "cancelled" || status.startsWith("failed")) {
+      controls.style.display = "none";
+    } else {
+      pauseButton.textContent = "⏸ Pause";
+      pauseButton.dataset.state = "running";
+      pauseButton.disabled = false;
+      cancelButton.disabled = false;
+    }
+  }
+
+  function updateProgressText(item, data) {
+    let line = item.querySelector(".md-progress-line");
+    if (!line) {
+      line = document.createElement("div");
+      line.className = "md-progress-line";
+      line.innerHTML = `<span class="md-speed">—</span><span class="md-percent">0%</span>`;
+      const progress = item.querySelector(".progress");
+      if (progress) progress.parentNode.insertBefore(line, progress.nextSibling);
+    }
+    line.querySelector(".md-speed").textContent = data.speed ? `⚡ ${data.speed}` : "⚡ —";
+    line.querySelector(".md-percent").textContent = `${Number(data.percent || 0).toFixed(0)}%`;
+  }
+
+  window.monitorDownload = async function (jobId, item) {
+    if (!localEngineBase) return;
+    addDownloadControls(item, jobId);
+
+    try {
+      const response = await fetch(`${localEngineBase}/download/${encodeURIComponent(jobId)}`);
+      if (!response.ok) return;
+      const data = await response.json();
+
+      const status = item.querySelector(".queue-status");
+      const bar = item.querySelector(".progress-bar");
+      const percent = Math.max(0, Math.min(100, Number(data.percent || 0)));
+      bar.style.width = `${percent}%`;
+
+      status.textContent = data.status || "working";
+      if (data.eta != null && data.status !== "completed" && data.status !== "cancelled") {
+        status.textContent += ` • ETA ${data.eta}s`;
+      }
+
+      updateProgressText(item, data);
+      updateDownloadControls(item, data);
+
+      const normalized = String(data.status || "").toLowerCase();
+      const finished = normalized === "completed" || normalized === "cancelled" || normalized.startsWith("failed");
+
+      if (!finished) {
+        setTimeout(() => window.monitorDownload(jobId, item), 800);
+      }
+    } catch (error) {
+      console.log("Progress check failed", error);
+      setTimeout(() => window.monitorDownload(jobId, item), 1500);
+    }
+  };
+
+  window.addEventListener("load", () => {
+    installCutButton();
+    installSettings();
+  });
   setTimeout(installCutButton, 50);
   setTimeout(installCutButton, 500);
+  setTimeout(installSettings, 50);
+  setTimeout(installSettings, 500);
 
   window.addDownload = async function () {
     const url = byId("url").value.trim();
@@ -181,7 +386,7 @@
       item.querySelector(".queue-status").textContent =
         `Queued • ${mode}${audioFormat ? " • " + audioFormat : ""}${section ? ` • ✂ ${section.start} → ${section.end}` : ""} • Job ${data.job_id}`;
 
-      if (typeof window.monitorDownload === "function") window.monitorDownload(data.job_id, item);
+      window.monitorDownload(data.job_id, item);
     } catch (error) {
       item.querySelector(".queue-status").textContent = `❌ ${error.message || "Failed to start"}`;
       console.error(error);
