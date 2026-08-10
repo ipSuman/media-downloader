@@ -7,6 +7,8 @@ import android.os.Environment
 import android.provider.MediaStore
 import com.chaquo.python.Python
 import com.yausername.ffmpeg.FFmpeg
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLRequest
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONObject
 import java.io.File
@@ -25,15 +27,8 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     private val executor = Executors.newCachedThreadPool()
     private val jobs = ConcurrentHashMap<String, File>()
 
-    // youtubedl-android extracts the bundled FFmpeg/FFprobe package here.
-    private val ffmpegDir = File(
-        context.noBackupFilesDir,
-        "youtubedl-android/packages/ffmpeg"
-    )
-
-    init {
-        initializeFfmpeg()
-    }
+    @Volatile
+    private var androidYtDlpReady = false
 
     private fun log(message: String, throwable: Throwable? = null) {
         val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
@@ -49,30 +44,33 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         android.util.Log.e("MediaDownloader", message, throwable)
     }
 
-    private fun initializeFfmpeg() {
-        try {
-            log("Initializing bundled FFmpeg")
-            FFmpeg.getInstance().init(context.applicationContext)
-            val ffmpeg = File(ffmpegDir, "ffmpeg")
-            val ffprobe = File(ffmpegDir, "ffprobe")
-            log("Bundled FFmpeg initialized: ${ffmpeg.exists()} | FFprobe: ${ffprobe.exists()} | dir=${ffmpegDir.absolutePath}")
-        } catch (e: Exception) {
-            log("Bundled FFmpeg initialization FAILED", e)
+    /**
+     * Initialize the same Android yt-dlp + FFmpeg stack used by Seal.
+     * This is lazy so the app can display the WebView immediately.
+     */
+    @Synchronized
+    private fun ensureAndroidYtDlp(): String {
+        if (androidYtDlpReady) {
+            return try {
+                YoutubeDL.getInstance().version(context) ?: "unknown"
+            } catch (_: Exception) {
+                "unknown"
+            }
         }
-    }
 
-    private fun configurePythonFfmpeg(engine: com.chaquo.python.PyObject) {
-        if (!ffmpegDir.isDirectory) {
-            throw IllegalStateException("Bundled FFmpeg directory is missing: ${ffmpegDir.absolutePath}")
+        log("Initializing Android yt-dlp engine")
+        YoutubeDL.getInstance().init(context.applicationContext)
+        log("Initializing bundled FFmpeg")
+        FFmpeg.getInstance().init(context.applicationContext)
+        androidYtDlpReady = true
+
+        val version = try {
+            YoutubeDL.getInstance().version(context) ?: "unknown"
+        } catch (_: Exception) {
+            "unknown"
         }
-        val ffmpeg = File(ffmpegDir, "ffmpeg")
-        val ffprobe = File(ffmpegDir, "ffprobe")
-        if (!ffmpeg.isFile || !ffprobe.isFile) {
-            throw IllegalStateException(
-                "Bundled FFmpeg binaries are missing: ffmpeg=${ffmpeg.exists()}, ffprobe=${ffprobe.exists()}"
-            )
-        }
-        engine.callAttr("set_ffmpeg_location", ffmpegDir.absolutePath)
+        log("Android yt-dlp engine ready: $version")
+        return version
     }
 
     private fun exportLogToDownloads() {
@@ -114,29 +112,26 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     }
 
     private fun pythonStatus(): String {
-        log("Checking yt-dlp + FFmpeg Python engine")
+        log("Checking analysis engine")
         return try {
             val py = Python.getInstance()
-            log("Python.getInstance() succeeded")
             val engine = py.getModule("engine")
-            log("Imported Python module: engine")
-            configurePythonFfmpeg(engine)
             val version = engine.callAttr("get_version").toString()
-            log("yt-dlp version detected: $version")
-            val ffmpeg = File(ffmpegDir, "ffmpeg")
-            val ffprobe = File(ffmpegDir, "ffprobe")
+            log("Python yt-dlp version detected: $version")
+            val androidVersion = ensureAndroidYtDlp()
             JSONObject().apply {
                 put("ytdlp", JSONObject().apply {
-                    put("installed", version)
-                    put("latest", version)
+                    put("installed", androidVersion)
+                    put("latest", androidVersion)
                 })
                 put("ffmpeg", JSONObject().apply {
-                    put("installed", if (ffmpeg.isFile) "Bundled" else "Not installed")
-                    put("latest", if (ffprobe.isFile) "Bundled" else "Unavailable")
+                    put("installed", "Bundled")
+                    put("latest", "Bundled")
                 })
+                put("analysis_ytdlp", version)
             }.toString()
         } catch (e: Exception) {
-            log("yt-dlp + FFmpeg engine check FAILED", e)
+            log("Engine check FAILED", e)
             exportLogToDownloads()
             JSONObject().apply {
                 put("ytdlp", JSONObject().apply {
@@ -147,7 +142,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     put("installed", "Error")
                     put("latest", "Unknown")
                 })
-                put("error", e.message ?: "Python engine error")
+                put("error", e.message ?: "Engine error")
             }.toString()
         }
     }
@@ -170,7 +165,6 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             log("Analyzing URL: $url")
             val py = Python.getInstance()
             val engine = py.getModule("engine")
-            configurePythonFfmpeg(engine)
             val result = engine.callAttr("analyze_json", url).toString()
             log("URL analysis completed")
             jsonResponse(Response.Status.OK, result)
@@ -195,7 +189,10 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val request = JSONObject(body)
             val url = request.optString("url", "").trim()
             if (url.isEmpty()) {
-                return jsonResponse(Response.Status.BAD_REQUEST, """{"ok":false,"error":"URL is required"}""")
+                return jsonResponse(
+                    Response.Status.BAD_REQUEST,
+                    """{"ok":false,"error":"URL is required"}"""
+                )
             }
 
             val jobId = UUID.randomUUID().toString().replace("-", "").take(12)
@@ -206,42 +203,75 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             jobs[jobId] = jobDir
             writeJobStatus(jobDir, """{"status":"starting","percent":0}""")
 
-            val format = request.optString("format", "")
+            val format = request.optString("format", "").trim()
             val audioOnly = request.optBoolean("audio_only", false)
-            val audioFormat = request.optString("audio_format", "")
-            val audioQuality = request.optString("audio_quality", "")
-            val mergeOutputFormat = request.optString("merge_output_format", "")
+            val audioFormat = request.optString("audio_format", "").trim().lowercase(Locale.US)
+            val audioQuality = request.optString("audio_quality", "").trim()
+            val mergeOutputFormat = request.optString("merge_output_format", "").trim()
 
-            log("Starting download job $jobId: $url | format=$format | audioOnly=$audioOnly | audioFormat=$audioFormat | audioQuality=$audioQuality | container=$mergeOutputFormat")
+            log("Starting Android download job $jobId: $url | format=$format | audioOnly=$audioOnly | audioFormat=$audioFormat | audioQuality=$audioQuality | container=$mergeOutputFormat")
 
             executor.execute {
                 try {
-                    val py = Python.getInstance()
-                    val engine = py.getModule("engine")
-                    configurePythonFfmpeg(engine)
-                    val resultJson = engine.callAttr(
-                        "download_json",
-                        url,
-                        jobDir.absolutePath,
-                        format,
-                        audioOnly,
+                    ensureAndroidYtDlp()
+
+                    val outputTemplate = File(jobDir, "%(title)s [%(id)s].%(ext)s").absolutePath
+                    val ytdlpRequest = YoutubeDLRequest(url).apply {
+                        addOption("-o", outputTemplate)
+                        addOption("--no-mtime")
+                        addOption("--no-playlist")
+                        addOption("--retries", "3")
+                        addOption("--fragment-retries", "3")
+                        addOption("--socket-timeout", "30")
+                        addOption("--force-ipv4")
+
+                        if (format.isNotEmpty()) {
+                            addOption("-f", format)
+                        } else {
+                            addOption("-f", if (audioOnly) "bestaudio/best" else "bv*+ba/b")
+                        }
+
+                        if (mergeOutputFormat.isNotEmpty() && mergeOutputFormat != "auto") {
+                            addOption("--merge-output-format", mergeOutputFormat)
+                        }
+
+                        if (audioOnly) {
+                            addOption("-x")
+                            if (audioFormat.isNotEmpty()) {
+                                addOption("--audio-format", audioFormat)
+                            }
+                            if (audioQuality.isNotEmpty() && !audioQuality.equals("best", true)) {
+                                addOption("--audio-quality", audioQuality)
+                            }
+                        }
+                    }
+
+                    YoutubeDL.getInstance().execute(
+                        ytdlpRequest,
                         jobId,
-                        audioFormat,
-                        audioQuality,
-                        mergeOutputFormat
-                    ).toString()
-                    val result = JSONObject(resultJson)
-                    val sourcePath = File(result.getString("path"))
-                    val destination = saveToDownloads(
-                        sourcePath,
-                        result.optString("filename", sourcePath.name)
-                    )
+                    ) { progress, eta, line ->
+                        val pct = progress.toInt().coerceIn(0, 100)
+                        writeJobStatus(
+                            jobDir,
+                            JSONObject().apply {
+                                put("status", if (pct >= 100) "processing" else "downloading")
+                                put("percent", pct)
+                                put("eta", eta)
+                                put("message", line ?: "")
+                            }.toString()
+                        )
+                    }
+
+                    val sourcePath = findDownloadedFile(jobDir)
+                        ?: throw IllegalStateException("yt-dlp completed but no output file was found")
+
+                    val destination = saveToDownloads(sourcePath, sourcePath.name)
                     val completed = JSONObject().apply {
                         put("status", "completed")
                         put("percent", 100)
                         put("filename", destination.first)
                         put("uri", destination.second)
-                        put("size", result.optLong("size", sourcePath.length()))
+                        put("size", sourcePath.length())
                     }.toString()
                     writeJobStatus(jobDir, completed)
                     log("Download job $jobId completed: ${destination.first}")
@@ -276,6 +306,14 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 }.toString()
             )
         }
+    }
+
+    private fun findDownloadedFile(jobDir: File): File? {
+        return jobDir.walkTopDown()
+            .filter { it.isFile }
+            .filter { !it.name.endsWith(".part") }
+            .filter { it.name != "progress.json" && it.name != "android_status.json" }
+            .maxByOrNull { it.lastModified() }
     }
 
     private fun writeJobStatus(jobDir: File, json: String) {
@@ -340,16 +378,17 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
 
     private fun downloadStatus(jobId: String): Response {
         val jobDir = jobs[jobId]
-            ?: return jsonResponse(Response.Status.NOT_FOUND, """{"ok":false,"error":"Unknown job"}""")
+            ?: return jsonResponse(
+                Response.Status.NOT_FOUND,
+                """{"ok":false,"error":"Unknown job"}"""
+            )
 
-        val progressFile = File(jobDir, "progress.json")
         val androidStatus = File(jobDir, "android_status.json")
-
         return try {
-            val raw = when {
-                androidStatus.exists() -> androidStatus.readText()
-                progressFile.exists() -> progressFile.readText()
-                else -> """{"status":"starting","percent":0}"""
+            val raw = if (androidStatus.exists()) {
+                androidStatus.readText()
+            } else {
+                """{"status":"starting","percent":0}"""
             }
             jsonResponse(Response.Status.OK, raw)
         } catch (e: Exception) {
