@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import time
 
 import yt_dlp
 
@@ -86,13 +85,22 @@ def _safe_job_id(job_id):
     return re.sub(r"[^A-Za-z0-9_-]", "", str(job_id)) or "job"
 
 
-def download(url, output_dir, format_selector="", audio_only=False, job_id="job"):
-    """Download one directly available stream with yt-dlp.
+def download(
+    url,
+    output_dir,
+    format_selector="",
+    audio_only=False,
+    job_id="job",
+    audio_format="",
+    audio_quality="",
+    merge_output_format="",
+):
+    """Download according to the selector supplied by the web UI.
 
-    This first download milestone intentionally avoids FFmpeg.  When the UI
-    requests a selector that requires merging (for example bv*+ba), we fall
-    back to a single combined audio+video format so the APK remains usable
-    without a native FFmpeg library.
+    No silent quality downgrade is performed.  If a selected format requires
+    FFmpeg (for example video+audio merging or MP3 conversion), yt-dlp's
+    error is returned to the Android job log instead of substituting a lower
+    quality combined stream.
     """
     if not isinstance(url, str) or not url.strip():
         raise ValueError("URL is required")
@@ -104,12 +112,14 @@ def download(url, output_dir, format_selector="", audio_only=False, job_id="job"
 
     _write_progress(progress_path, status="starting", percent=0)
 
-    if audio_only:
-        selector = "bestaudio/best"
-    else:
-        selector = str(format_selector or "").strip()
-        if not selector or "+" in selector or selector in ("bv*+ba/b", "bestvideo+bestaudio/best"):
-            selector = "best[vcodec!=none][acodec!=none]/best"
+    selector = str(format_selector or "").strip()
+    if not selector:
+        selector = "bestaudio/best" if audio_only else "bv*+ba/b"
+
+    # MP3 is a conversion target, not a normal YouTube source stream.
+    # Refuse it explicitly until the optional FFmpeg engine is installed.
+    if audio_only and str(audio_format).strip().lower() == "mp3":
+        raise RuntimeError("MP3 conversion requires FFmpeg. Choose M4A/Opus/FLAC for a direct audio download.")
 
     def hook(data):
         state = data.get("status")
@@ -141,9 +151,13 @@ def download(url, output_dir, format_selector="", audio_only=False, job_id="job"
         "overwrites": False,
     }
 
-    if audio_only:
-        # No post-processing here: this is a direct audio stream download.
-        options["format"] = "bestaudio/best"
+    if merge_output_format and merge_output_format != "auto":
+        options["merge_output_format"] = merge_output_format
+
+    if audio_only and audio_quality and str(audio_quality).lower() != "best":
+        match = re.search(r"(\d+)", str(audio_quality))
+        if match:
+            options["format_sort"] = [f"abr:{match.group(1)}"]
 
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -156,7 +170,10 @@ def download(url, output_dir, format_selector="", audio_only=False, job_id="job"
         base, _ = os.path.splitext(prepared)
         for name in os.listdir(output_dir):
             path = os.path.join(output_dir, name)
-            if os.path.isfile(path) and (name == os.path.basename(prepared) or name.startswith(os.path.basename(base))):
+            if os.path.isfile(path) and (
+                name == os.path.basename(prepared)
+                or name.startswith(os.path.basename(base))
+            ):
                 candidates.append(path)
 
         candidates = list(dict.fromkeys(candidates))
@@ -165,7 +182,13 @@ def download(url, output_dir, format_selector="", audio_only=False, job_id="job"
 
         output_file = max(candidates, key=os.path.getmtime)
         size = os.path.getsize(output_file)
-        _write_progress(progress_path, status="completed", percent=100, size=size, filename=os.path.basename(output_file))
+        _write_progress(
+            progress_path,
+            status="completed",
+            percent=100,
+            size=size,
+            filename=os.path.basename(output_file),
+        )
         return {
             "ok": True,
             "job_id": job_id,
@@ -173,14 +196,35 @@ def download(url, output_dir, format_selector="", audio_only=False, job_id="job"
             "filename": os.path.basename(output_file),
             "size": size,
             "format": selector,
+            "audio_only": audio_only,
+            "audio_format": audio_format,
+            "audio_quality": audio_quality,
         }
     except Exception as exc:
         _write_progress(progress_path, status="failed", percent=0, error=str(exc))
         raise
 
 
-def download_json(url, output_dir, format_selector="", audio_only=False, job_id="job"):
+def download_json(
+    url,
+    output_dir,
+    format_selector="",
+    audio_only=False,
+    job_id="job",
+    audio_format="",
+    audio_quality="",
+    merge_output_format="",
+):
     return json.dumps(
-        download(url, output_dir, format_selector, audio_only, job_id),
+        download(
+            url,
+            output_dir,
+            format_selector,
+            audio_only,
+            job_id,
+            audio_format,
+            audio_quality,
+            merge_output_format,
+        ),
         ensure_ascii=False,
     )
