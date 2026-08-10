@@ -253,7 +253,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
 
             YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
                 val state = jobStates[jobId] ?: "running"
-                writeProgress(dir, state, progress, eta, line)
+                writeProgress(dir, state, progress.toDouble(), eta, line)
             }
 
             when (jobStates[jobId]) {
