@@ -72,6 +72,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.webkit:webkit:1.12.1")
+    implementation("androidx.documentfile:documentfile:1.1.0")
 
     // Embedded local HTTP server
     implementation("org.nanohttpd:nanohttpd:2.3.1")
