@@ -76,7 +76,8 @@ dependencies {
     // Embedded local HTTP server
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 
-    // Seal-style Android yt-dlp engine + bundled FFmpeg for merging/conversion.
-    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
-    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
+    // Seal-compatible Android yt-dlp engine + bundled FFmpeg.
+    // Keep 0.17.3 as the known-good Android baseline.
+    implementation("io.github.junkfood02.youtubedl-android:library:0.17.3")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.17.3")
 }
