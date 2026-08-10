@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="50%" stop-color="#1E1B4B"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="50%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#A855F7"/>
+    </linearGradient>
+    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <g id="background">
+    <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+    <circle cx="256" cy="256" r="180" fill="none" stroke="#6366F1" stroke-width="2" opacity="0.15"/>
+    <circle cx="256" cy="256" r="130" fill="none" stroke="#38BDF8" stroke-width="2" opacity="0.1" stroke-dasharray="8 8"/>
+  </g>
+  <g id="foreground" filter="url(#dropShadow)">
+    <path d="M 176 150 C 176 136 191 127 203 134 L 366 240 C 377 247 377 265 366 272 L 203 378 C 191 385 176 376 176 362 Z" fill="url(#accentGrad)"/>
+    <g fill="#FFFFFF">
+      <rect x="240" y="175" width="32" height="80" rx="12"/>
+      <path d="M 204 240 C 197 240 193 249 198 255 L 249 308 C 253 312 259 312 263 308 L 314 255 C 319 249 315 240 308 240 Z"/>
+      <rect x="202" y="324" width="108" height="18" rx="9"/>
+    </g>
+  </g>
+</svg>
