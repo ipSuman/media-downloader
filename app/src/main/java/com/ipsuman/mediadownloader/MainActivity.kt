@@ -32,11 +32,27 @@ class MainActivity : AppCompatActivity() {
         webView.settings.allowContentAccess = true
         webView.settings.allowUniversalAccessFromFileURLs = true
 
-        webView.webViewClient = WebViewClient()
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                injectSelectionBridge()
+            }
+        }
 
         setContentView(webView)
 
         webView.loadUrl("file:///android_asset/index.html")
+    }
+
+    private fun injectSelectionBridge() {
+        try {
+            val script = assets.open("selection-bridge.js")
+                .bufferedReader(Charsets.UTF_8)
+                .use { it.readText() }
+            webView.evaluateJavascript(script, null)
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Could not inject selection bridge", e)
+        }
     }
 
     override fun onDestroy() {
