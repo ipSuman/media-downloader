@@ -21,9 +21,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Start local engine API and diagnostic logging.
         engineServer = LocalEngineServer(this)
-
         try {
             engineServer?.start()
         } catch (e: Exception) {
@@ -31,13 +29,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView = WebView(this)
-
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
         webView.settings.allowFileAccess = true
         webView.settings.allowContentAccess = true
         webView.settings.allowUniversalAccessFromFileURLs = true
-
         webView.addJavascriptInterface(AndroidBridge(), "Android")
 
         webView.webViewClient = object : WebViewClient() {
@@ -50,13 +46,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         setContentView(webView)
-
         webView.loadUrl("file:///android_asset/index.html")
     }
 
     private fun injectSelectionBridge() {
         try {
-            val scripts = listOf("theme.js", "selection-bridge.js", "cut-input-fix.js")
+            // Keep the proven cut workflow. Do not inject the experimental
+            // cut-input-fix layer which was causing the sequence to become
+            // confusing/non-repeatable.
+            val scripts = listOf("theme.js", "selection-bridge.js")
             for (scriptName in scripts) {
                 val script = assets.open(scriptName)
                     .bufferedReader(Charsets.UTF_8)
@@ -68,8 +66,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Safety net: if the WebView-side Settings handler fails to install,
-    // tapping the gear still opens the Android folder picker.
     private fun installSettingsNativeFallback() {
         webView.postDelayed({
             webView.evaluateJavascript(
@@ -100,7 +96,6 @@ class MainActivity : AppCompatActivity() {
                 addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                 addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                 addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-
                 prefs.getString("download_tree_uri", null)?.let {
                     try {
                         putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(it))
@@ -137,7 +132,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-
         if (requestCode != folderPickerRequestCode || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
 
@@ -159,7 +153,6 @@ class MainActivity : AppCompatActivity() {
             .putString("download_tree_uri", uri.toString())
             .putString("download_tree_name", folderName)
             .apply()
-
         sendSelectedFolderToWeb()
     }
 
@@ -191,15 +184,10 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         engineServer?.stop()
         engineServer = null
-
         super.onDestroy()
     }
 
     override fun onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack()
-        } else {
-            super.onBackPressed()
-        }
+        if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 }
