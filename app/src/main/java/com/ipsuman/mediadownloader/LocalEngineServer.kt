@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import com.chaquo.python.Python
+import com.yausername.ffmpeg.FFmpeg
 import fi.iki.elonen.NanoHTTPD
 import org.json.JSONObject
 import java.io.File
@@ -24,6 +25,16 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     private val executor = Executors.newCachedThreadPool()
     private val jobs = ConcurrentHashMap<String, File>()
 
+    // youtubedl-android extracts the bundled FFmpeg/FFprobe package here.
+    private val ffmpegDir = File(
+        context.noBackupFilesDir,
+        "youtubedl-android/packages/ffmpeg"
+    )
+
+    init {
+        initializeFfmpeg()
+    }
+
     private fun log(message: String, throwable: Throwable? = null) {
         val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
         val text = buildString {
@@ -36,6 +47,32 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         }
         try { logFile.appendText(text) } catch (_: Exception) {}
         android.util.Log.e("MediaDownloader", message, throwable)
+    }
+
+    private fun initializeFfmpeg() {
+        try {
+            log("Initializing bundled FFmpeg")
+            FFmpeg.getInstance().init(context.applicationContext)
+            val ffmpeg = File(ffmpegDir, "ffmpeg")
+            val ffprobe = File(ffmpegDir, "ffprobe")
+            log("Bundled FFmpeg initialized: ${ffmpeg.exists()} | FFprobe: ${ffprobe.exists()} | dir=${ffmpegDir.absolutePath}")
+        } catch (e: Exception) {
+            log("Bundled FFmpeg initialization FAILED", e)
+        }
+    }
+
+    private fun configurePythonFfmpeg(engine: com.chaquo.python.PyObject) {
+        if (!ffmpegDir.isDirectory) {
+            throw IllegalStateException("Bundled FFmpeg directory is missing: ${ffmpegDir.absolutePath}")
+        }
+        val ffmpeg = File(ffmpegDir, "ffmpeg")
+        val ffprobe = File(ffmpegDir, "ffprobe")
+        if (!ffmpeg.isFile || !ffprobe.isFile) {
+            throw IllegalStateException(
+                "Bundled FFmpeg binaries are missing: ffmpeg=${ffmpeg.exists()}, ffprobe=${ffprobe.exists()}"
+            )
+        }
+        engine.callAttr("set_ffmpeg_location", ffmpegDir.absolutePath)
     }
 
     private fun exportLogToDownloads() {
@@ -77,26 +114,29 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     }
 
     private fun pythonStatus(): String {
-        log("Checking yt-dlp Python engine")
+        log("Checking yt-dlp + FFmpeg Python engine")
         return try {
             val py = Python.getInstance()
             log("Python.getInstance() succeeded")
             val engine = py.getModule("engine")
             log("Imported Python module: engine")
+            configurePythonFfmpeg(engine)
             val version = engine.callAttr("get_version").toString()
             log("yt-dlp version detected: $version")
+            val ffmpeg = File(ffmpegDir, "ffmpeg")
+            val ffprobe = File(ffmpegDir, "ffprobe")
             JSONObject().apply {
                 put("ytdlp", JSONObject().apply {
                     put("installed", version)
                     put("latest", version)
                 })
                 put("ffmpeg", JSONObject().apply {
-                    put("installed", "Not installed")
-                    put("latest", "Unknown")
+                    put("installed", if (ffmpeg.isFile) "Bundled" else "Not installed")
+                    put("latest", if (ffprobe.isFile) "Bundled" else "Unavailable")
                 })
             }.toString()
         } catch (e: Exception) {
-            log("yt-dlp engine check FAILED", e)
+            log("yt-dlp + FFmpeg engine check FAILED", e)
             exportLogToDownloads()
             JSONObject().apply {
                 put("ytdlp", JSONObject().apply {
@@ -104,7 +144,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     put("latest", "Unknown")
                 })
                 put("ffmpeg", JSONObject().apply {
-                    put("installed", "Not installed")
+                    put("installed", "Error")
                     put("latest", "Unknown")
                 })
                 put("error", e.message ?: "Python engine error")
@@ -130,6 +170,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             log("Analyzing URL: $url")
             val py = Python.getInstance()
             val engine = py.getModule("engine")
+            configurePythonFfmpeg(engine)
             val result = engine.callAttr("analyze_json", url).toString()
             log("URL analysis completed")
             jsonResponse(Response.Status.OK, result)
@@ -177,6 +218,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 try {
                     val py = Python.getInstance()
                     val engine = py.getModule("engine")
+                    configurePythonFfmpeg(engine)
                     val resultJson = engine.callAttr(
                         "download_json",
                         url,
@@ -330,7 +372,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             session.method == Method.GET && session.uri == "/api/status" ->
                 jsonResponse(
                     Response.Status.OK,
-                    """{"ok":true,"engine":"media-downloader","platform":"android","version":"0.1.0"}"""
+                    """{"ok":true,"engine":"media-downloader","platform":"android","version":"0.2.0"}"""
                 )
 
             session.method == Method.GET && session.uri == "/api/versions" ->
