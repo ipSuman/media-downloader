@@ -51,7 +51,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun injectSelectionBridge() {
         try {
-            val scripts = listOf("theme.js", "selection-bridge.js", "cut-keyboard-fix.js")
+            val scripts = listOf("api-compat.js", "theme.js", "selection-bridge.js", "cut-keyboard-fix.js")
             for (scriptName in scripts) {
                 val script = assets.open(scriptName).bufferedReader(Charsets.UTF_8).use { it.readText() }
                 webView.evaluateJavascript(script, null)
