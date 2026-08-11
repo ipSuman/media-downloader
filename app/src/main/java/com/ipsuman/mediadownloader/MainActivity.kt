@@ -246,11 +246,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Clear only the app-owned cookie state. Do not call back into the WebView
+     * from the JavaScript bridge and do not touch the running yt-dlp engine.
+     * The WebView already updates its own status immediately after this call.
+     * This avoids a re-entrant WebView/native callback path that could kill the
+     * Activity on some Android WebView builds.
+     */
     private fun clearYoutubeCookies() {
-        try { File(filesDir, "youtube-cookies.txt").delete() } catch (_: Exception) {}
-        prefs.edit().putBoolean("youtube_cookies_configured", false).apply()
-        updateYtdlpConfig()
-        sendYoutubeCookiesStatusToWeb()
+        try {
+            val cookieFile = File(filesDir, "youtube-cookies.txt")
+            if (cookieFile.exists() && !cookieFile.delete()) {
+                android.util.Log.w("MediaDownloader", "Could not delete YouTube cookie file")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Could not delete YouTube cookies", e)
+        }
+        try {
+            prefs.edit().putBoolean("youtube_cookies_configured", false).apply()
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Could not clear YouTube cookie preference", e)
+        }
+        try {
+            val config = ytdlpConfigFile()
+            if (config.exists() && !config.delete()) {
+                android.util.Log.w("MediaDownloader", "Could not delete yt-dlp cookie config")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Could not remove yt-dlp cookie config", e)
+        }
         android.util.Log.d("MediaDownloader", "YouTube cookies cleared")
     }
 
