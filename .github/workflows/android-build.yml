@@ -3,7 +3,7 @@ name: Android Build
 on:
   push:
     branches:
-      - main
+      - youtube-quality-fallback
   workflow_dispatch:
 
 permissions:
@@ -20,15 +20,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Restore known-good engine source
+      - name: Apply YouTube quality fallback patch
+        run: python3 scripts/patch-youtube-quality.py
+
+      - name: Commit patched source
         run: |
-          git show 3e02a6a89fe0f48b768d66f0e3f0b7b03536c221:app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt > app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
-          if ! git diff --quiet -- app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt; then
+          if ! git diff --quiet; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
-            git commit -m "Restore known-good engine server source [skip ci]"
-            git push origin HEAD:main
+            git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt app/src/main/assets/download-fix.js
+            git commit -m "Handle YouTube quality with cookie fallback [skip ci]"
+            git push origin HEAD:youtube-quality-fallback
           fi
 
       - name: Set up JDK 17
@@ -48,5 +50,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MediaDownloader-debug
+          name: MediaDownloader-youtube-quality-fallback
           path: app/build/outputs/apk/debug/app-debug.apk
