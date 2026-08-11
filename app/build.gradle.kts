@@ -10,6 +10,10 @@ android {
     namespace = "com.ipsuman.mediadownloader"
     compileSdk = 35
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "com.ipsuman.mediadownloader"
         minSdk = 26
