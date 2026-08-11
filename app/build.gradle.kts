@@ -14,7 +14,8 @@ android {
         applicationId = "com.ipsuman.mediadownloader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
+        val ciIteration = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+        versionCode = ciIteration ?: 2
         versionName = "0.2.0"
         ndk {
           abiFilters += listOf("arm64-v8a")
