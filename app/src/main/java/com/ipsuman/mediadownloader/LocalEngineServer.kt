@@ -88,6 +88,19 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         } catch (e: Exception) { log("Could not export diagnostic log", e) }
     }
 
+    private fun youtubeCookiesFile(): File? {
+        val file = File(context.filesDir, "youtube-cookies.txt")
+        return if (file.isFile && file.length() > 0L) file else null
+    }
+
+    private fun addAuthenticationOptions(request: YoutubeDLRequest) {
+        val cookies = youtubeCookiesFile()
+        if (cookies != null) {
+            request.addOption("--cookies", cookies.absolutePath)
+            log("Using imported YouTube cookies for yt-dlp authentication")
+        }
+    }
+
     private fun cors(r: Response): Response {
         r.addHeader("Access-Control-Allow-Origin", "*")
         r.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -123,7 +136,8 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             if (url.isEmpty()) return json(Response.Status.BAD_REQUEST, """{"ok":false,"error":"URL is required"}""")
             log("Analyzing URL with Android yt-dlp: $url")
             ensureEngine()
-            val info: VideoInfo = YoutubeDL.getInstance().getInfo(url)
+            val request = YoutubeDLRequest(url).apply { addAuthenticationOptions(this) }
+            val info: VideoInfo = YoutubeDL.getInstance().getInfo(request)
             val formats = JSONArray()
             for (fmt in info.formats.orEmpty()) {
                 formats.put(JSONObject().apply {
@@ -190,6 +204,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     ): YoutubeDLRequest {
         val dir = jobs[jobId] ?: throw IllegalStateException("Unknown download job")
         return YoutubeDLRequest(url).apply {
+            addAuthenticationOptions(this)
             addOption("-o", File(dir, "%(title)s [%(id)s].%(ext)s").absolutePath)
             addOption("--no-mtime")
             addOption("--no-playlist")
@@ -368,138 +383,112 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                         return json(Response.Status.CONFLICT, """{"ok":false,"error":"Job is already finished"}""")
                     }
                     jobStates[id] = "cancelled"
-                    try { YoutubeDL.getInstance().destroyProcessById(id) } catch (_: Exception) {}
+                    YoutubeDL.getInstance().destroyProcessById(id)
                     writeStatus(dir, """{"status":"cancelled","percent":0}""")
-                    executor.execute { cleanupJob(id, deleteFiles = true) }
-                    log("Terminate requested for download $id")
+                    log("Cancel requested for download $id")
                 }
             }
-            json(Response.Status.OK, JSONObject().apply { put("ok", true); put("status", jobStates[id] ?: action) }.toString())
+            json(Response.Status.OK, """{"ok":true,"status":"${jobStates[id] ?: current}"}""")
         } catch (e: Exception) {
-            val msg = diagnostic(e)
-            log("Download control failed for $id ($action): $msg", e)
-            json(Response.Status.INTERNAL_ERROR, JSONObject().apply {
-                put("ok", false)
-                put("error", msg)
-            }.toString())
+            log("Download control FAILED for $id/$action", e)
+            json(Response.Status.INTERNAL_ERROR, """{"ok":false,"error":"${diagnostic(e).replace("\"", "'")}"}""")
         }
     }
 
-    private fun cleanupJob(id: String, deleteFiles: Boolean) {
-        if (deleteFiles) {
-            try { jobs[id]?.deleteRecursively() } catch (_: Exception) {}
-        }
-        jobRequests.remove(id)
-        if (deleteFiles) jobs.remove(id)
-    }
-
-    private fun writeStatus(dir: File, text: String) {
-        try { File(dir, "android_status.json").writeText(text) }
-        catch (e: Exception) { log("Could not write job status", e) }
-    }
-
-    private fun saveToDownloads(source: File, requested: String): Pair<String, String> {
-        val name = requested.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val selectedUri = preferences.getString("download_tree_uri", null)
-        if (!selectedUri.isNullOrBlank()) {
+    private fun saveToDownloads(source: File, displayName: String): Pair<String, String> {
+        val treeUri = preferences.getString("download_tree_uri", null)
+        if (!treeUri.isNullOrBlank()) {
             try {
-                val tree = DocumentFile.fromTreeUri(context, Uri.parse(selectedUri))
-                    ?: throw IllegalStateException("Selected folder is no longer available")
-                if (!tree.canWrite()) throw IllegalStateException("Selected folder is not writable")
-                val existing = tree.findFile(name)
-                existing?.delete()
-                val target = tree.createFile(mimeType(name), name)
-                    ?: throw IllegalStateException("Could not create file in selected folder")
-                context.contentResolver.openOutputStream(target.uri)?.use { out ->
-                    FileInputStream(source).use { input -> input.copyTo(out) }
-                } ?: throw IllegalStateException("Could not open selected folder output")
-                return Pair(name, target.uri.toString())
-            } catch (e: Exception) {
-                log("Selected folder save failed; falling back to Downloads", e)
-            }
+                val tree = DocumentFile.fromTreeUri(context, Uri.parse(treeUri))
+                if (tree != null && tree.canWrite()) {
+                    val safeName = displayName.ifBlank { source.name }
+                    val target = tree.createFile("video/*", safeName)
+                    if (target != null) {
+                        context.contentResolver.openOutputStream(target.uri)?.use { out -> source.inputStream().use { it.copyTo(out) } }
+                        return safeName to target.uri.toString()
+                    }
+                }
+            } catch (e: Exception) { log("Custom download folder failed; falling back to Downloads", e) }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, name)
-                put(MediaStore.Downloads.MIME_TYPE, mimeType(name))
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, displayName.ifBlank { source.name })
+            put(MediaStore.Downloads.MIME_TYPE, guessMime(source.name))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
-            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: throw IllegalStateException("Could not create Downloads entry")
-            try {
-                context.contentResolver.openOutputStream(uri)?.use { out ->
-                    FileInputStream(source).use { it.copyTo(out) }
-                } ?: throw IllegalStateException("Could not open Downloads output")
-                values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0)
-                context.contentResolver.update(uri, values, null, null)
-                return Pair(name, uri.toString())
-            } catch (e: Exception) {
-                context.contentResolver.delete(uri, null, null)
-                throw e
-            }
         }
-        val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        if (!downloads.exists()) downloads.mkdirs()
-        val target = File(downloads, name)
-        FileInputStream(source).use { input -> FileOutputStream(target).use { input.copyTo(it) } }
-        return Pair(target.name, target.toURI().toString())
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IllegalStateException("Could not create Downloads entry")
+        resolver.openOutputStream(uri)?.use { out -> source.inputStream().use { it.copyTo(out) } }
+            ?: throw IllegalStateException("Could not open Downloads output")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        }
+        return displayName.ifBlank { source.name } to uri.toString()
     }
 
-    private fun mimeType(name: String) = when (name.substringAfterLast('.', "").lowercase(Locale.US)) {
-        "mp4", "m4v" -> "video/mp4"
-        "webm" -> "video/webm"
-        "mkv" -> "video/x-matroska"
-        "mp3" -> "audio/mpeg"
-        "m4a" -> "audio/mp4"
-        "opus" -> "audio/opus"
-        "ogg" -> "audio/ogg"
-        "flac" -> "audio/flac"
-        else -> "application/octet-stream"
+    private fun guessMime(name: String): String {
+        return when (name.substringAfterLast('.', "").lowercase(Locale.US)) {
+            "mp4" -> "video/mp4"
+            "webm" -> "video/webm"
+            "mkv" -> "video/x-matroska"
+            "mp3" -> "audio/mpeg"
+            "m4a" -> "audio/mp4"
+            "opus" -> "audio/ogg"
+            "wav" -> "audio/wav"
+            else -> "application/octet-stream"
+        }
     }
 
-    private fun downloadStatus(id: String): Response {
-        val dir = jobs[id] ?: return json(Response.Status.NOT_FOUND, """{"ok":false,"error":"Unknown job"}""")
-        return try {
-            json(Response.Status.OK, if (File(dir, "android_status.json").exists()) {
-                File(dir, "android_status.json").readText()
-            } else {
-                """{"status":"starting","percent":0,"speed":null}"""
-            })
-        } catch (e: Exception) {
-            json(Response.Status.INTERNAL_ERROR, JSONObject().apply {
-                put("status", "failed: ${diagnostic(e)}")
-                put("error", diagnostic(e))
-            }.toString())
-        }
+    private fun writeStatus(dir: File, json: String) {
+        try { File(dir, "android_status.json").writeText(json) } catch (e: Exception) { log("Could not write job status", e) }
+    }
+
+    private fun cleanupJob(jobId: String, deleteFiles: Boolean) {
+        val dir = jobs.remove(jobId)
+        jobRequests.remove(jobId)
+        jobStates.remove(jobId)
+        if (deleteFiles) dir?.deleteRecursively()
     }
 
     override fun serve(session: IHTTPSession): Response {
-        if (session.method == Method.OPTIONS) return cors(newFixedLengthResponse(Response.Status.OK, "text/plain", ""))
-        val response = when {
-            session.method == Method.GET && session.uri == "/api/status" ->
-                json(Response.Status.OK, """{"ok":true,"engine":"media-downloader","platform":"android","version":"0.2.0"}""")
-            session.method == Method.GET && session.uri == "/api/versions" -> json(Response.Status.OK, versions())
-            session.method == Method.POST && session.uri == "/api/analyze" -> analyzeUrl(session)
-            session.method == Method.POST && session.uri == "/api/download" -> startDownload(session)
-            session.method == Method.POST && session.uri.matches(Regex("/api/download/[^/]+/(pause|resume|cancel)")) -> {
-                val parts = session.uri.split('/')
-                controlDownload(parts[3], parts[4])
+        return try {
+            if (session.method == Method.OPTIONS) return cors(newFixedLengthResponse(Response.Status.OK, "text/plain", ""))
+            val path = session.uri.substringBefore('?')
+            val response = when {
+                path == "/health" -> json(Response.Status.OK, versions())
+                path == "/analyze" && session.method == Method.POST -> analyzeUrl(session)
+                path == "/download" && session.method == Method.POST -> startDownload(session)
+                path.startsWith("/download/") && path.endsWith("/control") && session.method == Method.POST -> {
+                    val id = path.removePrefix("/download/").removeSuffix("/control").trim('/')
+                    val files = HashMap<String, String>(); session.parseBody(files)
+                    val action = JSONObject(files["postData"] ?: "{}").optString("action", "")
+                    controlDownload(id, action)
+                }
+                path.startsWith("/status/") -> {
+                    val id = path.removePrefix("/status/").trim('/')
+                    val dir = jobs[id]
+                    if (dir == null) json(Response.Status.NOT_FOUND, """{"ok":false,"error":"Unknown job"}""")
+                    else {
+                        val file = File(dir, "android_status.json")
+                        json(Response.Status.OK, if (file.isFile) file.readText() else """{"status":"starting","percent":0}""")
+                    }
+                }
+                path == "/logs" -> {
+                    if (logFile.isFile) newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", logFile.readText())
+                    else newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", "No log yet")
+                }
+                else -> newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found")
             }
-            session.method == Method.GET && session.uri.startsWith("/api/download/") ->
-                downloadStatus(session.uri.substringAfterLast('/'))
-            session.method == Method.GET && session.uri == "/api/log" ->
-                newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", if (logFile.exists()) logFile.readText() else "No diagnostic log yet.")
-            else -> json(Response.Status.NOT_FOUND, """{"ok":false,"error":"Endpoint not found"}""")
+            cors(response)
+        } catch (e: Exception) {
+            log("HTTP request FAILED", e); exportLogToDownloads()
+            cors(json(Response.Status.INTERNAL_ERROR, JSONObject().apply {
+                put("ok", false); put("error", diagnostic(e))
+            }.toString()))
         }
-        return cors(response)
-    }
-
-    override fun stop() {
-        jobStates.keys.toList().forEach { id ->
-            try { YoutubeDL.getInstance().destroyProcessById(id) } catch (_: Exception) {}
-        }
-        executor.shutdownNow()
-        super.stop()
     }
 }
