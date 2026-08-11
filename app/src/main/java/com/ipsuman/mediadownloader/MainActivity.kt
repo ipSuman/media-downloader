@@ -39,6 +39,7 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 injectSelectionBridge()
+                injectBuildIteration()
                 sendSelectedFolderToWeb()
                 sendYoutubeCookiesStatusToWeb()
                 installSettingsNativeFallback()
@@ -47,6 +48,22 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(webView)
         webView.loadUrl("file:///android_asset/index.html")
+    }
+
+    private fun injectBuildIteration() {
+        val iteration = BuildConfig.VERSION_CODE
+        webView.evaluateJavascript(
+            """
+            (function(){
+              var footer = document.querySelector('footer');
+              if (!footer) return;
+              var text = footer.textContent || 'Media Downloader';
+              text = text.replace(/\s*•\s*Iteration\s*#\d+\s*$/i, '');
+              footer.textContent = text + ' • Iteration #$iteration';
+            })();
+            """.trimIndent(),
+            null
+        )
     }
 
     private fun injectSelectionBridge() {
