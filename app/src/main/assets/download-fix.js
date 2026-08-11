@@ -25,7 +25,7 @@
     const match = String(label || "").match(/(2160|1440|1080|720|480|360)/);
     if (!match) return "bv*+ba/b";
     const h = match[1];
-    return `bv*[height<=${h}]+ba/b[height<=${h}]`;
+    return `bv*[height=${h}]+ba/b[height=${h}]`;
   }
 
   function audioSelector(format) {

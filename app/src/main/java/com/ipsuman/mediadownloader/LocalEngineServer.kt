@@ -29,6 +29,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     private val executor = Executors.newCachedThreadPool()
     private val jobs = ConcurrentHashMap<String, File>()
     private val jobRequests = ConcurrentHashMap<String, YoutubeDLRequest>()
+    private val jobCookieRequests = ConcurrentHashMap<String, YoutubeDLRequest>()
     private val jobStates = ConcurrentHashMap<String, String>()
     private val preferences = context.getSharedPreferences("media_downloader", Context.MODE_PRIVATE)
     @Volatile private var engineReady = false
@@ -136,7 +137,9 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             if (url.isEmpty()) return json(Response.Status.BAD_REQUEST, """{"ok":false,"error":"URL is required"}""")
             log("Analyzing URL with Android yt-dlp: $url")
             ensureEngine()
-            val request = YoutubeDLRequest(url).apply { addAuthenticationOptions(this) }
+            // Analyze without imported cookies so YouTube exposes the full public format catalogue.
+            // Cookies remain available for the download retry path below.
+            val request = YoutubeDLRequest(url)
             val info: VideoInfo = YoutubeDL.getInstance().getInfo(request)
             val formats = JSONArray()
             for (fmt in info.formats.orEmpty()) {
@@ -200,11 +203,12 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         audioOnly: Boolean,
         audioFormat: String,
         audioQuality: String,
-        container: String
+        container: String,
+        useCookies: Boolean = true
     ): YoutubeDLRequest {
         val dir = jobs[jobId] ?: throw IllegalStateException("Unknown download job")
         return YoutubeDLRequest(url).apply {
-            addAuthenticationOptions(this)
+            if (useCookies) addAuthenticationOptions(this)
             addOption("-o", File(dir, "%(title)s [%(id)s].%(ext)s").absolutePath)
             addOption("--no-mtime")
             addOption("--no-playlist")
@@ -256,9 +260,24 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             ensureEngine()
             jobStates[jobId] = "running"
             writeProgress(dir, "starting", 0.0, null, "Starting download…")
-            YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
-                val state = jobStates[jobId] ?: "running"
-                writeProgress(dir, state, progress.toDouble(), eta, line)
+            try {
+                YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
+                    val state = jobStates[jobId] ?: "running"
+                    writeProgress(dir, state, progress.toDouble(), eta, line)
+                }
+            } catch (firstError: Exception) {
+                val cookieRequest = jobCookieRequests[jobId]
+                val canRetryWithCookies = cookieRequest != null &&
+                    jobStates[jobId] != "paused" && jobStates[jobId] != "cancelled"
+                if (!canRetryWithCookies) throw firstError
+                log("Initial YouTube download failed; retrying the same selected format with imported cookies", firstError)
+                jobStates[jobId] = "retrying"
+                writeProgress(dir, "retrying", readPercent(dir).toDouble(), null,
+                    "Retrying with imported YouTube cookies…")
+                YoutubeDL.getInstance().execute(cookieRequest!!, jobId) { progress, eta, line ->
+                    val state = jobStates[jobId] ?: "running"
+                    writeProgress(dir, state, progress.toDouble(), eta, line)
+                }
             }
             when (jobStates[jobId]) {
                 "paused" -> {
@@ -335,7 +354,17 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val container = req.optString("merge_output_format", "").trim()
             jobs[jobId] = dir
             jobStates[jobId] = "running"
-            jobRequests[jobId] = buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container)
+            val youtube = isYoutubeUrl(url)
+            jobRequests[jobId] = buildRequest(
+                jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container,
+                useCookies = !youtube
+            )
+            if (youtube && youtubeCookiesFile() != null) {
+                jobCookieRequests[jobId] = buildRequest(
+                    jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container,
+                    useCookies = true
+                )
+            }
             writeStatus(dir, """{"status":"starting","percent":0,"speed":null}""")
             log("Starting download $jobId: format=$format audioOnly=$audioOnly section=$start-$end")
             executor.execute { runJob(jobId) }
@@ -447,9 +476,18 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         try { File(dir, "android_status.json").writeText(json) } catch (e: Exception) { log("Could not write job status", e) }
     }
 
+    private fun isYoutubeUrl(url: String): Boolean {
+        return try {
+            val host = java.net.URI(url).host?.lowercase(Locale.US) ?: return false
+            host == "youtube.com" || host.endsWith(".youtube.com") ||
+                host == "youtu.be" || host.endsWith(".youtu.be")
+        } catch (_: Exception) { false }
+    }
+
     private fun cleanupJob(jobId: String, deleteFiles: Boolean) {
         val dir = jobs.remove(jobId)
         jobRequests.remove(jobId)
+        jobCookieRequests.remove(jobId)
         jobStates.remove(jobId)
         if (deleteFiles) dir?.deleteRecursively()
     }
