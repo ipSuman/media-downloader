@@ -246,13 +246,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Clear only the app-owned cookie state. Do not call back into the WebView
-     * from the JavaScript bridge and do not touch the running yt-dlp engine.
-     * The WebView already updates its own status immediately after this call.
-     * This avoids a re-entrant WebView/native callback path that could kill the
-     * Activity on some Android WebView builds.
-     */
     private fun clearYoutubeCookies() {
         try {
             val cookieFile = File(filesDir, "youtube-cookies.txt")
@@ -333,7 +326,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun clearDownloadFolder() { runOnUiThread { clearSelectedFolder() } }
         @JavascriptInterface fun getDownloadFolderName(): String = prefs.getString("download_tree_name", "") ?: ""
         @JavascriptInterface fun chooseYoutubeCookies() { runOnUiThread { openYoutubeCookiesPicker() } }
-        @JavascriptInterface fun clearYoutubeCookies() { runOnUiThread { clearYoutubeCookies() } }
+        @JavascriptInterface fun clearYoutubeCookies() { runOnUiThread { this@MainActivity.clearYoutubeCookies() } }
         @JavascriptInterface fun hasYoutubeCookies(): Boolean = File(filesDir, "youtube-cookies.txt").isFile && File(filesDir, "youtube-cookies.txt").length() > 0L
     }
 
