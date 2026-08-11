@@ -24,8 +24,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         updateYtdlpConfig()
-        engineServer = LocalEngineServer(this)
-        try { engineServer?.start() } catch (e: Exception) { e.printStackTrace() }
+        startLocalEngine()
 
         webView = WebView(this)
         webView.settings.javaScriptEnabled = true
@@ -39,6 +38,7 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 injectSelectionBridge()
+                injectEngineDiscoveryFix()
                 injectBuildIteration()
                 sendSelectedFolderToWeb()
                 sendYoutubeCookiesStatusToWeb()
@@ -48,6 +48,26 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(webView)
         webView.loadUrl("file:///android_asset/index.html")
+    }
+
+    private fun startLocalEngine() {
+        try {
+            if (engineServer == null) engineServer = LocalEngineServer(this)
+            if (engineServer?.isAlive == true) return
+            android.util.Log.d("MediaDownloader", "Starting local engine on 127.0.0.1:8765")
+            engineServer?.start()
+            android.util.Log.d("MediaDownloader", "Local engine start requested; alive=${engineServer?.isAlive}")
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Local engine failed to start", e)
+            try { engineServer?.stop() } catch (_: Exception) {}
+            engineServer = LocalEngineServer(this)
+            try {
+                engineServer?.start()
+                android.util.Log.d("MediaDownloader", "Local engine retry; alive=${engineServer?.isAlive}")
+            } catch (retry: Exception) {
+                android.util.Log.e("MediaDownloader", "Local engine retry failed", retry)
+            }
+        }
     }
 
     private fun injectBuildIteration() {
@@ -60,6 +80,65 @@ class MainActivity : AppCompatActivity() {
               var text = footer.textContent || 'Media Downloader';
               text = text.replace(/\s*•\s*Iteration\s*#\d+\s*$/i, '');
               footer.textContent = text + ' • Iteration #$iteration';
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    private fun injectEngineDiscoveryFix() {
+        webView.evaluateJavascript(
+            """
+            (function(){
+              if(window.__mdEngineDiscoveryFixInstalled) return;
+              window.__mdEngineDiscoveryFixInstalled=true;
+
+              const ENGINE='http://127.0.0.1:8765';
+
+              function setOnline(data){
+                window.engineBase=ENGINE;
+                window.__mdNativeEngineBase=ENGINE;
+                try{
+                  if(typeof setEngineStatus==='function')
+                    setEngineStatus('🟢 Local engine connected','online');
+                  const yt=document.getElementById('ytVersion');
+                  const ff=document.getElementById('ffVersion');
+                  if(yt) yt.textContent=(data && data.ytdlp && data.ytdlp.installed) || 'Unknown';
+                  if(ff) ff.textContent=(data && data.ffmpeg && data.ffmpeg.installed) || 'Bundled';
+                }catch(e){}
+              }
+
+              window.discoverEngine=async function(){
+                try{
+                  if(typeof setEngineStatus==='function')
+                    setEngineStatus('Checking for local engine…','offline');
+                  const controller=new AbortController();
+                  const timer=setTimeout(function(){controller.abort();},2500);
+                  const response=await fetch(ENGINE+'/health',{method:'GET',signal:controller.signal,cache:'no-store'});
+                  clearTimeout(timer);
+                  if(!response.ok) throw new Error('HTTP '+response.status);
+                  const data=await response.json();
+                  if(!data || !data.ytdlp) throw new Error('Invalid engine response');
+                  setOnline(data);
+                  return true;
+                }catch(error){
+                  try{
+                    if(typeof setEngineStatus==='function')
+                      setEngineStatus('🔴 Local engine not detected','offline');
+                  }catch(e){}
+                  console.log('Native engine discovery failed',error);
+                  return false;
+                }
+              };
+
+              window.engineBase=ENGINE;
+              setTimeout(function(){window.discoverEngine();},150);
+              setTimeout(function(){
+                if(!window.engineBase) window.discoverEngine();
+              },1200);
+              setTimeout(function(){
+                if(!window.engineBase) window.discoverEngine();
+              },3000);
             })();
             """.trimIndent(),
             null
