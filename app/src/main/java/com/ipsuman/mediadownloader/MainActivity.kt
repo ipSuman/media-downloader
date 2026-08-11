@@ -1,6 +1,7 @@
 package com.ipsuman.mediadownloader
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -9,6 +10,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -16,6 +18,7 @@ class MainActivity : AppCompatActivity() {
     private var engineServer: LocalEngineServer? = null
     private val prefs by lazy { getSharedPreferences("media_downloader", MODE_PRIVATE) }
     private val folderPickerRequestCode = 4101
+    private val cookiesPickerRequestCode = 4102
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -37,6 +40,7 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 injectSelectionBridge()
                 sendSelectedFolderToWeb()
+                sendYoutubeCookiesStatusToWeb()
                 installSettingsNativeFallback()
             }
         }
@@ -95,6 +99,51 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { android.util.Log.e("MediaDownloader", "Could not open folder picker", e) }
     }
 
+    private fun openYoutubeCookiesPicker() {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "text/*"
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            }
+            android.util.Log.d("MediaDownloader", "Opening YouTube cookies picker")
+            startActivityForResult(intent, cookiesPickerRequestCode)
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Could not open YouTube cookies picker", e)
+        }
+    }
+
+    private fun importYoutubeCookies(uri: Uri) {
+        try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                val target = File(filesDir, "youtube-cookies.txt")
+                target.outputStream().use { output -> input.copyTo(output) }
+                if (target.length() == 0L) throw IllegalStateException("Selected cookie file is empty")
+                prefs.edit().putBoolean("youtube_cookies_configured", true).apply()
+                android.util.Log.d("MediaDownloader", "Imported YouTube cookies: ${target.length()} bytes")
+                sendYoutubeCookiesStatusToWeb()
+            } ?: throw IllegalStateException("Could not read selected cookie file")
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Could not import YouTube cookies", e)
+            webView.post { webView.evaluateJavascript("window.onYoutubeCookiesError && window.onYoutubeCookiesError(${JSONObjectEscaper.quote(e.message ?: "Import failed")});", null) }
+        }
+    }
+
+    private fun clearYoutubeCookies() {
+        try { File(filesDir, "youtube-cookies.txt").delete() } catch (_: Exception) {}
+        prefs.edit().putBoolean("youtube_cookies_configured", false).apply()
+        sendYoutubeCookiesStatusToWeb()
+        android.util.Log.d("MediaDownloader", "YouTube cookies cleared")
+    }
+
+    private fun sendYoutubeCookiesStatusToWeb() {
+        val configured = File(filesDir, "youtube-cookies.txt").isFile && File(filesDir, "youtube-cookies.txt").length() > 0L
+        webView.post {
+            webView.evaluateJavascript("window.onYoutubeCookiesStatus && window.onYoutubeCookiesStatus(${if (configured) "true" else "false"});", null)
+        }
+    }
+
     private fun sendSelectedFolderToWeb() {
         val uriString = prefs.getString("download_tree_uri", null)
         val name = prefs.getString("download_tree_name", "") ?: ""
@@ -114,25 +163,37 @@ class MainActivity : AppCompatActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != folderPickerRequestCode || resultCode != RESULT_OK) return
-        val uri = data?.data ?: return
-        try {
-            val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            contentResolver.takePersistableUriPermission(uri, flags)
-        } catch (e: Exception) { android.util.Log.w("MediaDownloader", "Could not persist folder permission", e) }
+        if (requestCode == folderPickerRequestCode) {
+            if (resultCode != RESULT_OK) return
+            val uri = data?.data ?: return
+            try {
+                val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                contentResolver.takePersistableUriPermission(uri, flags)
+            } catch (e: Exception) { android.util.Log.w("MediaDownloader", "Could not persist folder permission", e) }
 
-        val folderName = try {
-            androidx.documentfile.provider.DocumentFile.fromTreeUri(this, uri)?.name ?: "Selected folder"
-        } catch (_: Exception) { "Selected folder" }
+            val folderName = try {
+                androidx.documentfile.provider.DocumentFile.fromTreeUri(this, uri)?.name ?: "Selected folder"
+            } catch (_: Exception) { "Selected folder" }
 
-        prefs.edit().putString("download_tree_uri", uri.toString()).putString("download_tree_name", folderName).apply()
-        sendSelectedFolderToWeb()
+            prefs.edit().putString("download_tree_uri", uri.toString()).putString("download_tree_name", folderName).apply()
+            sendSelectedFolderToWeb()
+            return
+        }
+
+        if (requestCode == cookiesPickerRequestCode) {
+            if (resultCode != RESULT_OK) return
+            val uri = data?.data ?: return
+            importYoutubeCookies(uri)
+        }
     }
 
     private inner class AndroidBridge {
         @JavascriptInterface fun chooseDownloadFolder() { runOnUiThread { openFolderPicker() } }
         @JavascriptInterface fun clearDownloadFolder() { runOnUiThread { clearSelectedFolder() } }
         @JavascriptInterface fun getDownloadFolderName(): String = prefs.getString("download_tree_name", "") ?: ""
+        @JavascriptInterface fun chooseYoutubeCookies() { runOnUiThread { openYoutubeCookiesPicker() } }
+        @JavascriptInterface fun clearYoutubeCookies() { runOnUiThread { clearYoutubeCookies() } }
+        @JavascriptInterface fun hasYoutubeCookies(): Boolean = File(filesDir, "youtube-cookies.txt").isFile && File(filesDir, "youtube-cookies.txt").length() > 0L
     }
 
     private object JSONObjectEscaper {
@@ -141,6 +202,8 @@ class MainActivity : AppCompatActivity() {
             .replace("'", "\\'")
             .replace("\n", "\\n")
             .replace("\r", "\\r")
+
+        fun quote(value: String): String = "'${escape(value)}'"
     }
 
     override fun onDestroy() {
