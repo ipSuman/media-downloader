@@ -60,4 +60,21 @@
   } else {
     retry();
   }
+
+  // Load the hardened download bridge after the existing selection/cut bridge.
+  // This keeps the established cut workflow intact while making the actual
+  // download request use the native engine directly and report start errors.
+  setTimeout(function () {
+    try {
+      if (window.__mdDownloadFixInstalled) return;
+      const script = document.createElement("script");
+      script.src = "file:///android_asset/download-fix.js";
+      script.async = false;
+      script.onload = function () { console.log("Media Downloader: download-fix.js loaded"); };
+      script.onerror = function (e) { console.error("Media Downloader: download-fix.js failed to load", e); };
+      document.documentElement.appendChild(script);
+    } catch (e) {
+      console.error("Media Downloader: could not load download fix", e);
+    }
+  }, 0);
 })();
