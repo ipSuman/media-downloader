@@ -1,6 +1,21 @@
 (function () {
   "use strict";
 
+  // MainActivity's native discovery bridge exposes the engine as a window
+  // property. The web app itself keeps its engineBase as a top-level `let`,
+  // so synchronize that lexical binding before analyze()/download code uses it.
+  function syncNativeEngineBase() {
+    try {
+      const nativeBase = window.__mdNativeEngineBase || window.engineBase;
+      if (nativeBase) engineBase = nativeBase;
+    } catch (_) {}
+  }
+
+  syncNativeEngineBase();
+  setTimeout(syncNativeEngineBase, 100);
+  setTimeout(syncNativeEngineBase, 300);
+  setTimeout(syncNativeEngineBase, 800);
+
   function install() {
     const grid = document.querySelector(".time-grid");
     const toggle = document.getElementById("cutSectionToggle");
@@ -36,6 +51,7 @@
   }
 
   function retry() {
+    syncNativeEngineBase();
     if (!install()) setTimeout(retry, 300);
   }
 
