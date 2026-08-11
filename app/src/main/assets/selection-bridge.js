@@ -166,6 +166,11 @@
       .md-download-controls .cancel{color:var(--red);border-color:#713838}
       .md-progress-line{display:flex;justify-content:space-between;gap:8px;margin-top:7px;font-size:11px;color:var(--muted)}
       .md-percent{font-weight:900;color:var(--text)}
+      .md-youtube{margin-top:15px;padding-top:15px;border-top:1px solid var(--border)}
+      .md-youtube-title{font-size:14px;font-weight:900;color:var(--md-blue,#5aa9ff);margin-bottom:7px}
+      .md-cookie-status{font-size:11px;color:var(--muted);margin:0 0 9px}
+      .md-cookie-actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+      .md-cookie-note{font-size:10px;line-height:1.45;color:var(--muted);margin-top:9px}
     `;
     document.head.appendChild(style);
 
@@ -186,6 +191,15 @@
           <button class="md-action primary" id="mdChooseFolder">📁 Choose Folder</button>
           <button class="md-action" id="mdResetFolder">↩ Use Downloads</button>
         </div>
+        <div class="md-youtube">
+          <div class="md-youtube-title">▶ YouTube</div>
+          <div class="md-cookie-status" id="mdCookieStatus">Cookies: Not configured</div>
+          <div class="md-cookie-actions">
+            <button class="md-action primary" id="mdImportCookies">🍪 Import cookies.txt</button>
+            <button class="md-action" id="mdClearCookies">✕ Clear cookies</button>
+          </div>
+          <div class="md-cookie-note">Import a Netscape-format cookies.txt exported from your browser. The file is kept inside this app and is used only by yt-dlp.</div>
+        </div>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -194,6 +208,7 @@
     const openSettings = (event) => {
       if (event) event.preventDefault();
       updateFolderLabel();
+      updateCookieStatus();
       overlay.classList.add("show");
     };
     button.onclick = openSettings;
@@ -221,10 +236,40 @@
       }
       updateFolderLabel("Downloads");
     };
+    overlay.querySelector("#mdImportCookies").onclick = () => {
+      try {
+        if (window.Android && typeof window.Android.chooseYoutubeCookies === "function") {
+          window.Android.chooseYoutubeCookies();
+          return;
+        }
+      } catch (error) {
+        console.error("YouTube cookies bridge failed", error);
+      }
+      alert("Cookie import is available inside the Android app.");
+    };
+    overlay.querySelector("#mdClearCookies").onclick = () => {
+      try {
+        if (window.Android && typeof window.Android.clearYoutubeCookies === "function") {
+          window.Android.clearYoutubeCookies();
+        }
+      } catch (error) {
+        console.error("YouTube cookies clear failed", error);
+      }
+      updateCookieStatus(false);
+    };
 
     window.onNativeFolderSelected = function(uri, name) {
       updateFolderLabel(name || "Downloads");
       overlay.classList.add("show");
+    };
+
+    window.onYoutubeCookiesStatus = function(configured) {
+      updateCookieStatus(!!configured);
+    };
+
+    window.onYoutubeCookiesError = function(message) {
+      updateCookieStatus(false);
+      alert(message || "Could not import cookies.");
     };
 
     function updateFolderLabel(value) {
@@ -236,6 +281,24 @@
         el.textContent = name || "Downloads";
       } catch (_) {
         el.textContent = "Downloads";
+      }
+    }
+
+    function updateCookieStatus(value) {
+      const el = byId("mdCookieStatus");
+      if (!el) return;
+      if (value !== undefined) {
+        el.textContent = value ? "🍪 Cookies: Configured" : "Cookies: Not configured";
+        el.style.color = value ? "var(--md-green,#55d68a)" : "var(--muted)";
+        return;
+      }
+      try {
+        const configured = !!window.Android?.hasYoutubeCookies?.();
+        el.textContent = configured ? "🍪 Cookies: Configured" : "Cookies: Not configured";
+        el.style.color = configured ? "var(--md-green,#55d68a)" : "var(--muted)";
+      } catch (_) {
+        el.textContent = "Cookies: Not configured";
+        el.style.color = "var(--muted)";
       }
     }
   }
