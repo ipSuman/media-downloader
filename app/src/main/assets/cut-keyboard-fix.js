@@ -70,7 +70,39 @@
       const script = document.createElement("script");
       script.src = "file:///android_asset/download-fix.js";
       script.async = false;
-      script.onload = function () { console.log("Media Downloader: download-fix.js loaded"); };
+      script.onload = function () {
+        console.log("Media Downloader: download-fix.js loaded");
+
+        // The native engine exposes job status at /status/<jobId>.
+        // The hardened bridge historically polled /download/<jobId>, which
+        // is not a GET endpoint and therefore produced the misleading
+        // "Waiting for engine... Status HTTP 404" message. Rewrite only
+        // these GET status polls; POST download/control requests are untouched.
+        try {
+          if (window.__mdDownloadStatusFixInstalled) return;
+          const nativeFetch = window.fetch.bind(window);
+          window.fetch = function (input, init) {
+            try {
+              const method = String((init && init.method) || (input && input.method) || "GET").toUpperCase();
+              const rawUrl = typeof input === "string" ? input : (input && input.url);
+              if (method === "GET" && rawUrl) {
+                const u = new URL(rawUrl, window.location.href);
+                const match = u.pathname.match(/^\/download\/([^/]+)$/);
+                if (match && (u.hostname === "127.0.0.1" || u.hostname === "localhost")) {
+                  u.pathname = `/status/${match[1]}`;
+                  if (typeof input === "string") return nativeFetch(u.toString(), init);
+                  return nativeFetch(new Request(u.toString(), input), init);
+                }
+              }
+            } catch (_) {}
+            return nativeFetch(input, init);
+          };
+          window.__mdDownloadStatusFixInstalled = true;
+          console.log("Media Downloader: download status endpoint fixed");
+        } catch (e) {
+          console.error("Media Downloader: could not install status endpoint fix", e);
+        }
+      };
       script.onerror = function (e) { console.error("Media Downloader: download-fix.js failed to load", e); };
       document.documentElement.appendChild(script);
     } catch (e) {
