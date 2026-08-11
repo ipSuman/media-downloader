@@ -1,7 +1,6 @@
 package com.ipsuman.mediadownloader
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -24,6 +23,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        updateYtdlpConfig()
         engineServer = LocalEngineServer(this)
         try { engineServer?.start() } catch (e: Exception) { e.printStackTrace() }
 
@@ -114,6 +114,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun ytdlpConfigFile(): File = File(noBackupFilesDir, "youtubedl-android/config.txt")
+
+    private fun updateYtdlpConfig() {
+        try {
+            val config = ytdlpConfigFile()
+            val cookies = File(filesDir, "youtube-cookies.txt")
+            if (cookies.isFile && cookies.length() > 0L) {
+                config.parentFile?.mkdirs()
+                config.writeText("--cookies\n${cookies.absolutePath}\n")
+                android.util.Log.d("MediaDownloader", "yt-dlp config updated with private YouTube cookie file")
+            } else if (config.exists()) {
+                config.delete()
+                android.util.Log.d("MediaDownloader", "yt-dlp cookie config removed")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Could not update yt-dlp config", e)
+        }
+    }
+
     private fun importYoutubeCookies(uri: Uri) {
         try {
             contentResolver.openInputStream(uri)?.use { input ->
@@ -121,6 +140,7 @@ class MainActivity : AppCompatActivity() {
                 target.outputStream().use { output -> input.copyTo(output) }
                 if (target.length() == 0L) throw IllegalStateException("Selected cookie file is empty")
                 prefs.edit().putBoolean("youtube_cookies_configured", true).apply()
+                updateYtdlpConfig()
                 android.util.Log.d("MediaDownloader", "Imported YouTube cookies: ${target.length()} bytes")
                 sendYoutubeCookiesStatusToWeb()
             } ?: throw IllegalStateException("Could not read selected cookie file")
@@ -133,6 +153,7 @@ class MainActivity : AppCompatActivity() {
     private fun clearYoutubeCookies() {
         try { File(filesDir, "youtube-cookies.txt").delete() } catch (_: Exception) {}
         prefs.edit().putBoolean("youtube_cookies_configured", false).apply()
+        updateYtdlpConfig()
         sendYoutubeCookiesStatusToWeb()
         android.util.Log.d("MediaDownloader", "YouTube cookies cleared")
     }
