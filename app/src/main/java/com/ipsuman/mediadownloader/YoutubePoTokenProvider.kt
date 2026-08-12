@@ -46,6 +46,10 @@ class YoutubePoTokenProvider(private val context: Context) {
         private const val REQUEST_KEY = "O43z0dpjhgX20SCx4KAo"
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.3"
         private const val JS_INTERFACE = "PoTokenWebView"
+        // Matches the WEB client family used by current yt-dlp web_safari requests.
+        private const val WEB_CLIENT_VERSION = "2.20260708.00.00"
+        private const val WEB_CLIENT_NAME = "WEB"
+        private const val WEB_CLIENT_ID = "1"
     }
 
     init {
@@ -180,9 +184,6 @@ class YoutubePoTokenProvider(private val context: Context) {
     }
 
     private fun runBotguardPreparation() {
-        // The local BotGuard asset calls back into downloadAndRunBotguard itself.
-        // This fallback handles WebView implementations that finish loading before
-        // the injected callback executes.
         try { webView?.evaluateJavascript("typeof runBotGuard === 'function'") { } } catch (_: Exception) {}
     }
 
@@ -212,6 +213,53 @@ class YoutubePoTokenProvider(private val context: Context) {
         connection.disconnect()
         if (code != 200) throw IllegalStateException("HTTP $code: ${response.take(500)}")
         return response
+    }
+
+    /** Obtain the same visitorData value used by NewPipe before generating the streaming PO token. */
+    private fun getVisitorData(): String {
+        // First try an existing VISITOR_INFO1_LIVE cookie. This is useful when cookies were imported.
+        val cookieVisitor = runCatching {
+            CookieManager.getInstance().getCookie("https://www.youtube.com")
+                ?.split(';')
+                ?.map { it.trim() }
+                ?.firstOrNull { it.startsWith("VISITOR_INFO1_LIVE=") }
+                ?.substringAfter('=')
+        }.getOrNull()
+        if (!cookieVisitor.isNullOrBlank()) {
+            // This cookie is a visitor identifier, but yt-dlp's visitor_data argument expects the
+            // Innertube visitorData value. Keep it only as a fallback identifier for BotGuard.
+            lastError = "Using YouTube VISITOR_INFO1_LIVE as PO-token binding fallback"
+        }
+
+        val body = JSONObject().apply {
+            put("context", JSONObject().apply {
+                put("client", JSONObject().apply {
+                    put("clientName", WEB_CLIENT_NAME)
+                    put("clientVersion", WEB_CLIENT_VERSION)
+                })
+            })
+        }.toString()
+
+        val connection = URL("https://www.youtube.com/youtubei/v1/visitor_id?prettyPrint=false").openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.connectTimeout = 15000
+        connection.readTimeout = 20000
+        connection.doOutput = true
+        connection.setRequestProperty("User-Agent", USER_AGENT)
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setRequestProperty("X-YouTube-Client-Name", WEB_CLIENT_ID)
+        connection.setRequestProperty("X-YouTube-Client-Version", WEB_CLIENT_VERSION)
+        connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
+        val code = connection.responseCode
+        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+        val response = stream?.bufferedReader()?.use { it.readText() } ?: ""
+        connection.disconnect()
+        if (code != 200) throw IllegalStateException("visitor_id HTTP $code: ${response.take(500)}")
+        val visitor = JSONObject(response).optJSONObject("responseContext")?.optString("visitorData")
+        if (visitor.isNullOrBlank()) throw IllegalStateException("visitor_id response contained no visitorData")
+        lastError = "Visitor data acquired from Innertube"
+        return visitor
     }
 
     private fun parseChallengeData(raw: String): String {
@@ -274,53 +322,46 @@ class YoutubePoTokenProvider(private val context: Context) {
             }
         }
 
-        val bindingLatch = CountDownLatch(1)
-        var binding: String? = null
-        mainHandler.post {
-            try {
-                webView?.evaluateJavascript(
-                    "(function(){try{const y=window.top['ytcfg'];const b=y&&y.get&&(y.get('DATASYNC_ID')||y.get('VISITOR_DATA'));return b?String(b):''}catch(e){return ''}})()"
-                ) { value ->
-                    binding = value?.removeSurrounding("\"")?.replace("\\\"", "\"")?.takeIf { it.isNotBlank() }
-                    bindingLatch.countDown()
-                }
-            } catch (e: Exception) {
-                lastError = "Could not read YouTube content binding: ${e.message}"
-                bindingLatch.countDown()
-            }
-        }
-        if (!bindingLatch.await(10, TimeUnit.SECONDS) || binding.isNullOrBlank()) {
-            lastError = lastError ?: "No YouTube visitor/data-sync binding available"
+        val visitorData = try {
+            getVisitorData()
+        } catch (e: Exception) {
+            lastError = "Could not obtain YouTube visitorData: ${e.message}"
             return null
         }
 
-        val id = binding!!
         val resultLatch = CountDownLatch(1)
-        synchronized(tokenLatchLock) { tokenResults.remove(id); tokenErrors.remove(id) }
+        synchronized(tokenLatchLock) {
+            tokenResults.remove(visitorData)
+            tokenErrors.remove(visitorData)
+        }
+
         mainHandler.post {
             try {
-                val escaped = JSONObject.quote(id)
+                val escaped = JSONObject.quote(visitorData)
                 webView?.evaluateJavascript(
                     """try {
-                        const u8Identifier = new TextEncoder().encode($escaped);
                         const tokenU8 = obtainPoToken(webPoSignalOutput, integrityToken, $escaped);
                         let s=''; for (let i=0;i<tokenU8.length;i++) { if(i) s+=','; s+=tokenU8[i]; }
                         $JS_INTERFACE.onObtainPoTokenResult($escaped, s);
                     } catch(e) { $JS_INTERFACE.onObtainPoTokenError($escaped, String(e) + '\\n' + (e.stack || '')); }""".trimIndent(), null
                 )
             } catch (e: Exception) {
-                lastError = "PO-token JavaScript failed: ${e.message}"
+                synchronized(tokenLatchLock) { tokenErrors[visitorData] = "PO-token JavaScript failed: ${e.message}" }
                 resultLatch.countDown()
             }
         }
 
-        // The callback below stores the result; poll briefly to avoid keeping a
-        // continuation map alive across multiple downloads.
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
         while (System.nanoTime() < deadline) {
             synchronized(tokenLatchLock) {
-                tokenResults[id]?.let { return it }
-                tokenErrors[id]?.let { lastError = it; return null }
+                tokenResults[visitorData]?.let {
+                    lastError = "mweb GVS PO Token generated successfully"
+                    return it
+                }
+                tokenErrors[visitorData]?.let {
+                    lastError = "PO-token generation failed: $it"
+                    return null
+                }
             }
             Thread.sleep(50)
         }
@@ -344,7 +385,6 @@ class YoutubePoTokenProvider(private val context: Context) {
         synchronized(tokenLatchLock) { tokenErrors[identifier] = error }
     }
 
-    /** Kept for the existing engine's diagnostic interface. */
     fun lastError(): String? = lastError
 
     private fun ensureFfmpegExpatRuntime() {
@@ -352,13 +392,18 @@ class YoutubePoTokenProvider(private val context: Context) {
             val source = File(context.applicationInfo.nativeLibraryDir, "libexpat.so.1")
             val targetDir = File(context.noBackupFilesDir, "youtubedl-android/packages/ffmpeg/usr/lib")
             val target = File(targetDir, "libexpat.so.1")
-            if (!source.isFile || source.length() == 0L) return
+            if (!source.isFile || source.length() == 0L) {
+                lastError = lastError ?: "Bundled Android Expat library missing from nativeLibraryDir"
+                return
+            }
             if (!targetDir.isDirectory) targetDir.mkdirs()
             if (!target.isFile || target.length() != source.length()) {
                 FileInputStream(source).use { input -> FileOutputStream(target).use { output -> input.copyTo(output) } }
             }
             target.setReadable(true, false)
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            lastError = "Could not prepare FFmpeg Expat runtime: ${e.message}"
+        }
     }
 
     fun close() {
