@@ -22,11 +22,6 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/**
- * Android-native Web PO-token generator based on the BotGuard/WebPoClient flow
- * used by established Android YouTube clients. It runs YouTube's BotGuard VM
- * inside an isolated WebView and talks to the Integrity API directly.
- */
 @SuppressLint("SetJavaScriptEnabled")
 class YoutubePoTokenProvider(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -34,6 +29,7 @@ class YoutubePoTokenProvider(private val context: Context) {
     @Volatile private var initialized = false
     @Volatile private var initializing = false
     @Volatile private var lastError: String? = null
+    @Volatile private var lastVisitorData: String? = null
     private val initLatch = CountDownLatch(1)
     private val tokenLatchLock = Any()
     private val tokenResults = HashMap<String, String>()
@@ -46,15 +42,12 @@ class YoutubePoTokenProvider(private val context: Context) {
         private const val REQUEST_KEY = "O43z0dpjhgX20SCx4KAo"
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.3"
         private const val JS_INTERFACE = "PoTokenWebView"
-        // Matches the WEB client family used by current yt-dlp web_safari requests.
         private const val WEB_CLIENT_VERSION = "2.20260708.00.00"
         private const val WEB_CLIENT_NAME = "WEB"
         private const val WEB_CLIENT_ID = "1"
     }
 
-    init {
-        mainHandler.post { startInitialization() }
-    }
+    init { mainHandler.post { startInitialization() } }
 
     private fun startInitialization() {
         if (initializing || initialized) return
@@ -71,24 +64,16 @@ class YoutubePoTokenProvider(private val context: Context) {
             }
             w.addJavascriptInterface(this, JS_INTERFACE)
             w.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    mainHandler.post { runBotguardPreparation() }
-                }
-                override fun onReceivedError(
-                    view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?
-                ) {
-                    if (request?.isForMainFrame == true) {
-                        failInitialization(error?.description?.toString() ?: "WebView initialization error")
-                    }
+                override fun onPageFinished(view: WebView?, url: String?) { mainHandler.post { runBotguardPreparation() } }
+                override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                    if (request?.isForMainFrame == true) failInitialization(error?.description?.toString() ?: "WebView initialization error")
                 }
             }
             webView = w
             importCookiesIntoWebView()
             val html = context.assets.open("po_token.html").bufferedReader().use { it.readText() }
             w.loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "utf-8", null)
-        } catch (e: Exception) {
-            failInitialization(e.message ?: e.toString())
-        }
+        } catch (e: Exception) { failInitialization(e.message ?: e.toString()) }
     }
 
     private fun importCookiesIntoWebView() {
@@ -111,9 +96,7 @@ class YoutubePoTokenProvider(private val context: Context) {
                 cm.setCookie("https://$host$path", "$name=$value; path=$path")
             }
             cm.flush()
-        } catch (e: Exception) {
-            lastError = "Cookie import warning: ${e.message}"
-        }
+        } catch (e: Exception) { lastError = "Cookie import warning: ${e.message}" }
     }
 
     @JavascriptInterface
@@ -135,15 +118,10 @@ class YoutubePoTokenProvider(private val context: Context) {
                                 });
                             } catch (error) {
                                 $JS_INTERFACE.onJsInitializationError(String(error) + "\\n" + (error.stack || ""));
-                            }""".trimIndent(), null
-                        )
-                    } catch (e: Exception) {
-                        failInitialization(e.message ?: e.toString())
-                    }
+                            }""".trimIndent(), null)
+                    } catch (e: Exception) { failInitialization(e.message ?: e.toString()) }
                 }
-            } catch (e: Exception) {
-                failInitialization("BotGuard Create failed: ${e.message}")
-            }
+            } catch (e: Exception) { failInitialization("BotGuard Create failed: ${e.message}") }
         }.start()
     }
 
@@ -151,10 +129,7 @@ class YoutubePoTokenProvider(private val context: Context) {
     fun onRunBotguardResult(botguardResponse: String) {
         Thread {
             try {
-                val response = makeIntegrityRequest(
-                    "https://www.youtube.com/api/jnn/v1/GenerateIT",
-                    listOf(REQUEST_KEY, botguardResponse)
-                )
+                val response = makeIntegrityRequest("https://www.youtube.com/api/jnn/v1/GenerateIT", listOf(REQUEST_KEY, botguardResponse))
                 val parsed = JSONArray(response)
                 val integrityToken = base64ToJsU8(parsed.getString(0))
                 val ttl = parsed.optLong(1, 3600L)
@@ -167,21 +142,14 @@ class YoutubePoTokenProvider(private val context: Context) {
                             initializing = false
                             initLatch.countDown()
                         }
-                    } catch (e: Exception) {
-                        failInitialization(e.message ?: e.toString())
-                    }
+                    } catch (e: Exception) { failInitialization(e.message ?: e.toString()) }
                 }
                 lastError = "BotGuard initialized; token TTL=${ttl}s"
-            } catch (e: Exception) {
-                failInitialization("GenerateIT failed: ${e.message}")
-            }
+            } catch (e: Exception) { failInitialization("GenerateIT failed: ${e.message}") }
         }.start()
     }
 
-    @JavascriptInterface
-    fun onJsInitializationError(error: String) {
-        failInitialization("BotGuard JavaScript failed: $error")
-    }
+    @JavascriptInterface fun onJsInitializationError(error: String) { failInitialization("BotGuard JavaScript failed: $error") }
 
     private fun runBotguardPreparation() {
         try { webView?.evaluateJavascript("typeof runBotGuard === 'function'") { } } catch (_: Exception) {}
@@ -215,22 +183,7 @@ class YoutubePoTokenProvider(private val context: Context) {
         return response
     }
 
-    /** Obtain the same visitorData value used by NewPipe before generating the streaming PO token. */
     private fun getVisitorData(): String {
-        // First try an existing VISITOR_INFO1_LIVE cookie. This is useful when cookies were imported.
-        val cookieVisitor = runCatching {
-            CookieManager.getInstance().getCookie("https://www.youtube.com")
-                ?.split(';')
-                ?.map { it.trim() }
-                ?.firstOrNull { it.startsWith("VISITOR_INFO1_LIVE=") }
-                ?.substringAfter('=')
-        }.getOrNull()
-        if (!cookieVisitor.isNullOrBlank()) {
-            // This cookie is a visitor identifier, but yt-dlp's visitor_data argument expects the
-            // Innertube visitorData value. Keep it only as a fallback identifier for BotGuard.
-            lastError = "Using YouTube VISITOR_INFO1_LIVE as PO-token binding fallback"
-        }
-
         val body = JSONObject().apply {
             put("context", JSONObject().apply {
                 put("client", JSONObject().apply {
@@ -239,7 +192,6 @@ class YoutubePoTokenProvider(private val context: Context) {
                 })
             })
         }.toString()
-
         val connection = URL("https://www.youtube.com/youtubei/v1/visitor_id?prettyPrint=false").openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.connectTimeout = 15000
@@ -258,18 +210,14 @@ class YoutubePoTokenProvider(private val context: Context) {
         if (code != 200) throw IllegalStateException("visitor_id HTTP $code: ${response.take(500)}")
         val visitor = JSONObject(response).optJSONObject("responseContext")?.optString("visitorData")
         if (visitor.isNullOrBlank()) throw IllegalStateException("visitor_id response contained no visitorData")
+        lastVisitorData = visitor
         lastError = "Visitor data acquired from Innertube"
         return visitor
     }
 
     private fun parseChallengeData(raw: String): String {
         val scrambled = JSONArray(raw)
-        val challengeData = if (scrambled.length() > 1 && scrambled.opt(1) is String) {
-            val encoded = scrambled.getString(1)
-            JSONArray(descramble(encoded))
-        } else {
-            scrambled.getJSONArray(1)
-        }
+        val challengeData = if (scrambled.length() > 1 && scrambled.opt(1) is String) JSONArray(descramble(scrambled.getString(1))) else scrambled.getJSONArray(1)
         val messageId = challengeData.getString(0)
         val interpreterHash = challengeData.getString(3)
         val program = challengeData.getString(4)
@@ -321,20 +269,14 @@ class YoutubePoTokenProvider(private val context: Context) {
                 return null
             }
         }
-
-        val visitorData = try {
-            getVisitorData()
-        } catch (e: Exception) {
+        val visitorData = try { getVisitorData() } catch (e: Exception) {
             lastError = "Could not obtain YouTube visitorData: ${e.message}"
             return null
         }
-
-        val resultLatch = CountDownLatch(1)
         synchronized(tokenLatchLock) {
             tokenResults.remove(visitorData)
             tokenErrors.remove(visitorData)
         }
-
         mainHandler.post {
             try {
                 val escaped = JSONObject.quote(visitorData)
@@ -343,25 +285,16 @@ class YoutubePoTokenProvider(private val context: Context) {
                         const tokenU8 = obtainPoToken(webPoSignalOutput, integrityToken, $escaped);
                         let s=''; for (let i=0;i<tokenU8.length;i++) { if(i) s+=','; s+=tokenU8[i]; }
                         $JS_INTERFACE.onObtainPoTokenResult($escaped, s);
-                    } catch(e) { $JS_INTERFACE.onObtainPoTokenError($escaped, String(e) + '\\n' + (e.stack || '')); }""".trimIndent(), null
-                )
+                    } catch(e) { $JS_INTERFACE.onObtainPoTokenError($escaped, String(e) + '\\n' + (e.stack || '')); }""".trimIndent(), null)
             } catch (e: Exception) {
                 synchronized(tokenLatchLock) { tokenErrors[visitorData] = "PO-token JavaScript failed: ${e.message}" }
-                resultLatch.countDown()
             }
         }
-
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
         while (System.nanoTime() < deadline) {
             synchronized(tokenLatchLock) {
-                tokenResults[visitorData]?.let {
-                    lastError = "mweb GVS PO Token generated successfully"
-                    return it
-                }
-                tokenErrors[visitorData]?.let {
-                    lastError = "PO-token generation failed: $it"
-                    return null
-                }
+                tokenResults[visitorData]?.let { lastError = "mweb GVS PO Token generated successfully"; return it }
+                tokenErrors[visitorData]?.let { lastError = "PO-token generation failed: $it"; return null }
             }
             Thread.sleep(50)
         }
@@ -369,21 +302,20 @@ class YoutubePoTokenProvider(private val context: Context) {
         return null
     }
 
+    /** VisitorData to pass to yt-dlp's youtube:visitor_data extractor argument. */
+    fun visitorData(): String? = lastVisitorData
+
     @JavascriptInterface
     fun onObtainPoTokenResult(identifier: String, poTokenU8: String) {
         try {
             val bytes = poTokenU8.split(',').filter { it.isNotBlank() }.map { it.toInt().toByte() }.toByteArray()
             val token = Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP)
             synchronized(tokenLatchLock) { tokenResults[identifier] = token }
-        } catch (e: Exception) {
-            synchronized(tokenLatchLock) { tokenErrors[identifier] = e.message ?: e.toString() }
-        }
+        } catch (e: Exception) { synchronized(tokenLatchLock) { tokenErrors[identifier] = e.message ?: e.toString() } }
     }
 
     @JavascriptInterface
-    fun onObtainPoTokenError(identifier: String, error: String) {
-        synchronized(tokenLatchLock) { tokenErrors[identifier] = error }
-    }
+    fun onObtainPoTokenError(identifier: String, error: String) { synchronized(tokenLatchLock) { tokenErrors[identifier] = error } }
 
     fun lastError(): String? = lastError
 
@@ -401,9 +333,7 @@ class YoutubePoTokenProvider(private val context: Context) {
                 FileInputStream(source).use { input -> FileOutputStream(target).use { output -> input.copyTo(output) } }
             }
             target.setReadable(true, false)
-        } catch (e: Exception) {
-            lastError = "Could not prepare FFmpeg Expat runtime: ${e.message}"
-        }
+        } catch (e: Exception) { lastError = "Could not prepare FFmpeg Expat runtime: ${e.message}" }
     }
 
     fun close() {
