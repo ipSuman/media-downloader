@@ -3,7 +3,7 @@ name: Android Build
 on:
   push:
     branches:
-      - youtube-quality-fallback
+      - main
   workflow_dispatch:
 
 permissions:
@@ -44,10 +44,6 @@ jobs:
           EXPAT_TAG="R_2_8_2"
           mkdir -p .ci/expat
 
-          # Do not depend on the GitHub release-asset CDN. Build #179 failed
-          # because that endpoint returned HTTP 503 / curl exit 56. The tag
-          # archive contains the same official Expat source and is served by
-          # GitHub's source archive service instead.
           EXPAT_URLS=(
             "https://codeload.github.com/libexpat/libexpat/tar.gz/refs/tags/${EXPAT_TAG}"
             "https://downloads.sourceforge.net/project/expat/expat/${EXPAT_VERSION}/expat-${EXPAT_VERSION}.tar.gz"
@@ -71,7 +67,19 @@ jobs:
           test -s .ci/expat/expat.tar.gz
 
           tar -xzf .ci/expat/expat.tar.gz -C .ci/expat
-          cmake -S ".ci/expat/expat-${EXPAT_VERSION}" \
+
+          # The codeload archive uses the Git tag as its directory name
+          # (libexpat-R_2_8_2), while the SourceForge archive uses the version
+          # name (expat-2.8.2). Discover the source tree instead of assuming
+          # either naming convention.
+          EXPAT_SOURCE="$(find .ci/expat \
+            -mindepth 2 -maxdepth 2 \
+            -type f -name CMakeLists.txt \
+            -printf '%h\n' | head -n 1)"
+          test -n "$EXPAT_SOURCE"
+          echo "Using Expat source: $EXPAT_SOURCE"
+
+          cmake -S "$EXPAT_SOURCE" \
             -B .ci/expat/build \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
@@ -85,11 +93,10 @@ jobs:
             -DEXPAT_BUILD_PKGCONFIG=OFF \
             -DEXPAT_ENABLE_INSTALL=ON \
             -DCMAKE_INSTALL_PREFIX="$PWD/.ci/expat/install"
+
           cmake --build .ci/expat/build --target expat -j2
           cmake --install .ci/expat/build
 
-          # Package the Android library in the standard jniLibs source tree.
-          # The runtime later copies/uses it as FFmpeg's libexpat.so.1.
           mkdir -p app/src/main/jniLibs/arm64-v8a
           EXPAT_LIB="$(find .ci/expat/install -name 'libexpat.so*' -type f | head -n 1)"
           test -n "$EXPAT_LIB"
