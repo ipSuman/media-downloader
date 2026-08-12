@@ -1,0 +1,33 @@
+name: Apply FFmpeg runtime fix
+on:
+  push:
+    branches:
+      - youtube-quality-fallback
+    paths:
+      - '.github/workflows/run-ffmpeg-fix.yml'
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: youtube-quality-fallback
+          fetch-depth: 0
+      - name: Apply source fix
+        run: python3 scripts/fix_ffmpeg_runtime.py
+      - name: Commit source fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          git commit -m "Fix bundled FFmpeg runtime linking"
+          git push origin HEAD:youtube-quality-fallback
+      - name: Remove temporary files
+        if: always()
+        run: |
+          git rm -f scripts/fix_ffmpeg_runtime.py .github/workflows/run-ffmpeg-fix.yml || true
+          git commit -m "Remove temporary FFmpeg fix files" || true
+          git push origin HEAD:youtube-quality-fallback || true
