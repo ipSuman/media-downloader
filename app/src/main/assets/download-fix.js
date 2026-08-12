@@ -56,6 +56,22 @@
     return active && start && end ? { start, end } : null;
   }
 
+  async function controlJob(jobId, action) {
+    const response = await fetch(`${ENGINE}/download/${encodeURIComponent(jobId)}/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ action })
+    });
+    const text = await response.text();
+    let data;
+    try { data = JSON.parse(text); } catch (_) {
+      throw new Error(`Engine returned invalid control response (HTTP ${response.status})`);
+    }
+    if (!response.ok || !data.ok) throw new Error(data.error || `${action} failed (HTTP ${response.status})`);
+    return data;
+  }
+
   function addControls(item, jobId) {
     if (item.querySelector(".md-download-controls")) return;
     const controls = document.createElement("div");
@@ -71,9 +87,7 @@
       const action = paused ? "resume" : "pause";
       pause.disabled = true;
       try {
-        const r = await fetch(`${ENGINE}/download/${encodeURIComponent(jobId)}/${action}`, { method: "POST", cache: "no-store" });
-        const d = await r.json();
-        if (!r.ok || !d.ok) throw new Error(d.error || `${action} failed`);
+        await controlJob(jobId, action);
       } catch (e) {
         alert(e.message || `${action} failed`);
       } finally {
@@ -85,9 +99,7 @@
       if (!confirm("Terminate this download? The partial file will be discarded.")) return;
       cancel.disabled = true;
       try {
-        const r = await fetch(`${ENGINE}/download/${encodeURIComponent(jobId)}/cancel`, { method: "POST", cache: "no-store" });
-        const d = await r.json();
-        if (!r.ok || !d.ok) throw new Error(d.error || "Terminate failed");
+        await controlJob(jobId, "cancel");
       } catch (e) {
         cancel.disabled = false;
         alert(e.message || "Terminate failed");
@@ -98,7 +110,7 @@
   window.monitorDownload = async function (jobId, item) {
     addControls(item, jobId);
     try {
-      const r = await fetch(`${ENGINE}/download/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+      const r = await fetch(`${ENGINE}/status/${encodeURIComponent(jobId)}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`Status HTTP ${r.status}`);
       const d = await r.json();
       const status = item.querySelector(".queue-status");
