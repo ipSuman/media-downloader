@@ -1,0 +1,88 @@
+name: Apply final VP9 fixes
+
+on:
+  push:
+    branches:
+      - youtube-quality-fallback
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fix terminate button
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('app/src/main/assets/download-fix.js')
+          s = p.read_text()
+          old = '''    cancel.onclick = async () => {
+      if (!confirm("Terminate this download? The partial file will be discarded.")) return;
+      cancel.disabled = true;
+      try { await controlJob(jobId, "cancel"); } catch (e) { cancel.disabled = false; alert(e.message || "Terminate failed"); }
+    };'''
+          new = '''    cancel.onclick = async () => {
+      // Do not use window.confirm() inside the Android WebView. On some
+      // WebView/device combinations it can prevent the click handler from
+      // reaching the native engine, which made Terminate appear dead.
+      cancel.disabled = true;
+      pause.disabled = true;
+      const status = item.querySelector(".queue-status");
+      if (status) status.textContent = "⛔ Terminating…";
+      try {
+        await controlJob(jobId, "cancel");
+        if (status) status.textContent = "⛔ Terminated";
+        controls.style.display = "none";
+      } catch (e) {
+        cancel.disabled = false;
+        pause.disabled = false;
+        if (status) status.textContent = "⚠ Terminate failed";
+        alert(e.message || "Terminate failed");
+      }
+    };'''
+          if old not in s:
+              raise SystemExit('terminate handler anchor not found')
+          p.write_text(s.replace(old, new, 1))
+
+      - name: Load bundled C++ runtime explicitly
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt')
+          s = p.read_text()
+          old = '''        updateYtdlpConfig()
+        startLocalEngine()'''
+          new = '''        updateYtdlpConfig()
+        try {
+            // FFmpeg's bundled librubberband.so requires Android libc++.
+            // The runtime is packaged from the NDK by app/build.gradle.kts.
+            System.loadLibrary("c++_shared")
+            android.util.Log.d("MediaDownloader", "Loaded libc++_shared.so")
+        } catch (e: UnsatisfiedLinkError) {
+            android.util.Log.e("MediaDownloader", "Could not load libc++_shared.so", e)
+        }
+        startLocalEngine()'''
+          if old not in s:
+              raise SystemExit('MainActivity engine-init anchor not found')
+          p.write_text(s.replace(old, new, 1))
+
+      - name: Verify
+        run: |
+          grep -n "Do not use window.confirm\|Loaded libc++_shared.so" app/src/main/assets/download-fix.js app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt
+          test -f app/build.gradle.kts
+
+      - name: Commit patch and remove workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/assets/download-fix.js app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt
+          git commit -m "Fix terminate and load FFmpeg C++ runtime" || true
+          git rm .github/workflows/apply-final-vp9-fixes.yml
+          git commit -m "Remove temporary final-fix workflow"
+          git push origin HEAD:youtube-quality-fallback
