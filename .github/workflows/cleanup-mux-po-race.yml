@@ -1,0 +1,72 @@
+name: Clean Build 160 baseline and VP9 merge command
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Restore Build 160 engine files and apply only requested logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="e223248f08bec5e8bcba0f205bcffe1a51166b4c"
+          ENGINE="app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt"
+          PO="app/src/main/java/com/ipsuman/mediadownloader/YoutubePoTokenProvider.kt"
+          JS="app/src/main/assets/download-fix.js"
+          git show "$BASE:$ENGINE" > "$ENGINE"
+          git show "$BASE:$PO" > "$PO"
+          git show "$BASE:$JS" > "$JS"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("app/src/main/assets/download-fix.js"); s=p.read_text()
+          old='      format = chosen.id; videoCodec = chosen.codec;\n'
+          new='''      const shouldMergeVp9 = chosen.codec.toLowerCase().includes("vp9") && mergeEnabled();\n      format = shouldMergeVp9 ? `${chosen.id}+251` : chosen.id;\n      videoCodec = chosen.codec;\n'''
+          if s.count(old)!=1: raise SystemExit("download-fix.js quality assignment mismatch")
+          p.write_text(s.replace(old,new,1))
+          p=Path(ENGINE); s=p.read_text()
+          old='            if (isYoutubeUrl(jobUrls[jobId] ?: "") && codec.contains("vp9")) {\n'
+          new='            if (isYoutubeUrl(jobUrls[jobId] ?: "") && codec.contains("vp9") && !jobFormats[jobId].orEmpty().contains("+")) {\n'
+          if s.count(old)!=1: raise SystemExit("Build 160 VP9 dispatch guard missing")
+          s=s.replace(old,new,1)
+          old='    private fun addYoutubePoToken(request: YoutubeDLRequest) {\n'
+          new='    @Synchronized\n    private fun addYoutubePoToken(request: YoutubeDLRequest) {\n'
+          if s.count(old)!=1: raise SystemExit("PO token method missing")
+          s=s.replace(old,new,1)
+          old='                YoutubeDL.getInstance().execute(cookieRequest!!, jobId) { progress, eta, line ->\n'
+          new='''                addAuthenticationOptions(cookieRequest!!)\n                log("PO Token and visitorData ready before cookie retry")\n                YoutubeDL.getInstance().execute(cookieRequest, jobId) { progress, eta, line ->\n'''
+          if s.count(old)!=1: raise SystemExit("cookie retry call missing")
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff --stat
+          git diff -- app/src/main/assets/download-fix.js app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt app/src/main/java/com/ipsuman/mediadownloader/YoutubePoTokenProvider.kt
+      - name: Verify only requested changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --numstat -- app/src/main/assets/download-fix.js app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt app/src/main/java/com/ipsuman/mediadownloader/YoutubePoTokenProvider.kt
+          grep -q 'format = shouldMergeVp9 ? `${chosen.id}+251` : chosen.id;' app/src/main/assets/download-fix.js
+          grep -q 'codec.contains("vp9") && !jobFormats\[jobId\].orEmpty().contains("+")' app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          grep -q '@Synchronized' app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          grep -q 'PO Token and visitorData ready before cookie retry' app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+      - name: Commit and remove this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/cleanup-mux-po-race.yml
+          git add app/src/main/assets/download-fix.js app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt app/src/main/java/com/ipsuman/mediadownloader/YoutubePoTokenProvider.kt
+          git commit -m "Use yt-dlp VP9 merge selector and serialize PO token retries"
+          git push
