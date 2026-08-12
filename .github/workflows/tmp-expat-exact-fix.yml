@@ -1,0 +1,37 @@
+name: Temporary exact Expat patch
+
+on:
+  push:
+    branches: [youtube-quality-fallback]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Restore Build 160 engine and apply one-line Expat patch
+        run: |
+          set -euo pipefail
+          BASE="e223248f08bec5e8bcba0f205bcffe1a51166b4c"
+          FILE="app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt"
+          git show "$BASE:$FILE" > "$FILE"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt")
+          s=p.read_text()
+          old='File(nativeLibDirForFfmpeg(), "libexpat.so.1")'
+          new='File(nativeLibDirForFfmpeg(), "libexpat.so")'
+          assert s.count(old)==1
+          p.write_text(s.replace(old,new,1))
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FILE"
+          git diff --cached --check
+          git diff --cached --quiet || (git commit -m "Apply exact Expat source-name patch" && git push)
