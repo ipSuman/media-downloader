@@ -1,0 +1,282 @@
+name: Apply VP9 Quality Fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [youtube-quality-fallback]
+    paths:
+      - '.github/workflows/apply-vp9-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v6
+        with:
+          ref: youtube-quality-fallback
+          fetch-depth: 0
+
+      - name: Apply format, VP9 pipeline and engine probe fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('.')
+          index = root / 'index.html'
+          js = root / 'app/src/main/assets/download-fix.js'
+          compat = root / 'app/src/main/assets/api-compat.js'
+          kt = root / 'app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt'
+
+          s = index.read_text()
+          marker = 'window.__mdActualFormatSelectInstalled'
+          if marker not in s:
+              needle = '  formats.innerHTML = "";'
+              replacement = '''  formats.innerHTML = "";
+
+  // Real format-ID selector used by the Android download bridge.
+  if (!window.__mdActualFormatSelectInstalled) {
+    window.__mdActualFormatSelectInstalled = true;
+    const selector = document.createElement("select");
+    selector.id = "mdFormatSelect";
+    selector.style.cssText = "width:100%;margin:12px 0;padding:10px;border-radius:10px;background:var(--panel,#151515);color:var(--text,#fff);border:1px solid var(--border,#333);font-weight:700";
+    const heading = document.createElement("div");
+    heading.textContent = "Video format (exact yt-dlp ID)";
+    heading.style.cssText = "margin-top:12px;font-weight:800";
+    formats.parentNode.insertBefore(heading, formats);
+    formats.parentNode.insertBefore(selector, formats);
+  }
+  const mdSelect = document.getElementById("mdFormatSelect");
+  if (mdSelect) {
+    mdSelect.innerHTML = "";
+    const videoFormats = (data.formats || [])
+      .filter(f => f.vcodec && f.vcodec !== "none" && Number(f.height || 0) > 0)
+      .filter(f => /^(vp9|vp09|av01|avc1|h264)/i.test(String(f.vcodec)))
+      .sort((a,b) => (Number(b.height||0)-Number(a.height||0)) || (Number(b.fps||0)-Number(a.fps||0)) || String(a.format_id).localeCompare(String(b.format_id)));
+    for (const f of videoFormats) {
+      const o = document.createElement("option");
+      o.value = String(f.format_id || "");
+      o.dataset.vcodec = String(f.vcodec || "");
+      o.dataset.ext = String(f.ext || "");
+      o.textContent = `ID ${f.format_id} — ${f.height}p ${f.vcodec}${f.fps ? ` • ${f.fps}fps` : ""}${f.ext ? ` • ${f.ext}` : ""}`;
+      mdSelect.appendChild(o);
+    }
+    if (!mdSelect.options.length) {
+      const o = document.createElement("option"); o.value = ""; o.textContent = "No video formats"; mdSelect.appendChild(o);
+    }
+  }'''
+              if needle not in s:
+                  raise SystemExit('index insertion point not found')
+              s = s.replace(needle, replacement, 1)
+              index.write_text(s)
+
+          s = js.read_text()
+          s = re.sub(r'''  function videoSelector\(label\) \{.*?\n  \}\n\n  function audioSelector''', '''  function videoSelector(label) {
+    return String(label || "").trim() || "bv*+ba/b";
+  }
+
+  function selectedVideoFormat() {
+    const select = document.getElementById("mdFormatSelect");
+    if (!select || !select.value) return { id: "bv*+ba/b", codec: "" };
+    const option = select.options[select.selectedIndex];
+    return { id: String(select.value), codec: String(option?.dataset?.vcodec || "") };
+  }
+
+  function audioSelector''', s, count=1, flags=re.S)
+
+          old = '''      const selects = byId("videoOptions")?.querySelectorAll("select") || [];
+      const quality = selects[0]?.value || "Best available";
+      const container = selects[1]?.value || "Auto";
+      format = videoSelector(quality);
+      if (container !== "Auto") mergeOutputFormat = container.toLowerCase();'''
+          new = '''      const selects = byId("videoOptions")?.querySelectorAll("select") || [];
+      const chosen = selectedVideoFormat();
+      const quality = chosen.id;
+      const container = selects[1]?.value || "Auto";
+      format = videoSelector(quality);
+      if (container !== "Auto") mergeOutputFormat = container.toLowerCase();
+      var videoCodec = chosen.codec;'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          else:
+              # Keep compatibility with layouts that do not have the legacy selector.
+              s = s.replace('    let mergeOutputFormat = "";\n', '    let mergeOutputFormat = "";\n    var videoCodec = "";\n', 1)
+
+          s = s.replace('        merge_output_format: mergeOutputFormat,\n        subtitles,', '        merge_output_format: mergeOutputFormat,\n        video_codec: videoCodec || "",\n        subtitles,', 1)
+          js.write_text(s)
+
+          s = compat.read_text()
+          s = re.sub(r'''  const retryTimer = setInterval\(function\(\)\{.*?  setTimeout\(function\(\)\{ clearInterval\(retryTimer\); \}, 30000\);''', '''  let probeTimer = null;
+  let engineDetected = false;
+  function stopEngineProbing() {
+    if (probeTimer !== null) { clearInterval(probeTimer); probeTimer = null; }
+  }
+  async function probeOnce() {
+    if (engineDetected) return true;
+    try {
+      const response = await originalFetch(ENGINE + "/health", { method:"GET", cache:"no-store" });
+      if (!response.ok) return false;
+      const data = await response.json();
+      if (!data || !data.ytdlp) return false;
+      engineDetected = true;
+      window.engineBase = ENGINE;
+      window.__mdNativeEngineBase = ENGINE;
+      stopEngineProbing();
+      return true;
+    } catch (_) { return false; }
+  }
+  probeTimer = setInterval(function(){ probeOnce(); }, 3000);
+  setTimeout(function(){ if (!engineDetected) stopEngineProbing(); }, 30000);''', s, count=1, flags=re.S)
+          compat.write_text(s)
+
+          s = kt.read_text()
+          if 'jobVideoCodecs' not in s:
+              s = s.replace('private val jobCookieRequests = ConcurrentHashMap<String, YoutubeDLRequest>()', 'private val jobCookieRequests = ConcurrentHashMap<String, YoutubeDLRequest>()\n    private val jobVideoCodecs = ConcurrentHashMap<String, String>()\n    private val ffmpegProcesses = ConcurrentHashMap<String, Process>()', 1)
+
+          # Parse the codec selected by the real format selector.
+          s = s.replace('val container = req.optString("merge_output_format", "").trim()', 'val container = req.optString("merge_output_format", "").trim()\n            val videoCodec = req.optString("video_codec", "").trim()', 1)
+          s = s.replace('jobStates[jobId] = "running"\n            val youtube = isYoutubeUrl(url)', 'jobStates[jobId] = "running"\n            jobVideoCodecs[jobId] = videoCodec\n            val youtube = isYoutubeUrl(url)', 1)
+
+          # Run the explicit VP9/251 pipeline before the normal single-request path.
+          if 'private fun runVp9Job' not in s:
+              marker = '    private fun runJob(jobId: String) {\n'
+              fn = r'''    private fun runVp9Job(jobId: String) {
+        val dir = jobs[jobId] ?: return
+        val baseRequest = jobRequests[jobId] ?: return
+        val cookieRequest = jobCookieRequests[jobId]
+        val url = baseRequest.url
+        try {
+            log("Format selected: ${baseRequest.getOptionValue(\"-f\") ?: \"unknown\"}")
+            log("Codec detected: VP9")
+            log("Audio selected: 251")
+            val video = File(dir, "video.%(ext)s")
+            val audio = File(dir, "audio.%(ext)s")
+
+            fun makePart(formatId: String, output: File): YoutubeDLRequest {
+                val r = YoutubeDLRequest(url).apply {
+                    if (cookieRequest != null) addAuthenticationOptions(this)
+                    addOption("-o", output.absolutePath)
+                    addOption("--no-mtime")
+                    addOption("--no-playlist")
+                    addOption("--retries", "3")
+                    addOption("--fragment-retries", "3")
+                    addOption("--socket-timeout", "30")
+                    addOption("--force-ipv4")
+                    addOption("--continue")
+                    addOption("-f", formatId)
+                }
+                return r
+            }
+
+            val videoReq = makePart(baseRequest.getOptionValue("-f") ?: throw IllegalStateException("Missing selected format"), video)
+            log("Video download started")
+            try {
+                YoutubeDL.getInstance().execute(videoReq, jobId) { p,e,l -> writeProgress(dir, "video", (p.toDouble()*0.5), e, l) }
+            } catch (e: Exception) {
+                if (cookieRequest == null) throw e
+                log("VP9 video download failed; retrying selected video format with cookies", e)
+                YoutubeDL.getInstance().execute(makePart(baseRequest.getOptionValue("-f")!!, video)) { p,e2,l -> writeProgress(dir, "video", (p.toDouble()*0.5), e2, l) }
+            }
+            val videoFile = dir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("video.") && !it.name.endsWith(".part") }
+                ?: throw IllegalStateException("VP9 video download completed but video file was not found")
+            log("Video download completed: ${videoFile.name}")
+
+            val audioReq = makePart("251", audio)
+            log("Audio download started: format 251")
+            try {
+                YoutubeDL.getInstance().execute(audioReq, jobId) { p,e,l -> writeProgress(dir, "audio", 50.0 + p.toDouble()*0.4, e, l) }
+            } catch (e: Exception) {
+                if (cookieRequest == null) throw e
+                log("Opus 251 download failed; retrying with cookies", e)
+                YoutubeDL.getInstance().execute(makePart("251", audio)) { p,e2,l -> writeProgress(dir, "audio", 50.0 + p.toDouble()*0.4, e2, l) }
+            }
+            val audioFile = dir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("audio.") && !it.name.endsWith(".part") }
+                ?: throw IllegalStateException("Audio 251 download completed but audio file was not found")
+            log("Audio 251 download completed: ${audioFile.name}")
+
+            log("Waiting 3 seconds before FFmpeg concat")
+            Thread.sleep(3000)
+            if (jobStates[jobId] == "cancelled") return
+
+            val ffmpeg = File(context.noBackupFilesDir, "youtubedl-android/packages/ffmpeg/usr/bin/ffmpeg")
+            if (!ffmpeg.exists()) throw IllegalStateException("Bundled FFmpeg executable not found: ${ffmpeg.absolutePath}")
+            val output = File(dir, "${videoFile.name.substringBeforeLast('.')}.webm")
+            log("FFmpeg concat started")
+            log("FFmpeg command: ${ffmpeg.absolutePath} -y -i ${videoFile.absolutePath} -i ${audioFile.absolutePath} -c:v copy -c:a copy ${output.absolutePath}")
+            val process = ProcessBuilder(ffmpeg.absolutePath, "-y", "-i", videoFile.absolutePath, "-i", audioFile.absolutePath, "-c:v", "copy", "-c:a", "copy", output.absolutePath)
+                .redirectErrorStream(true).start()
+            ffmpegProcesses[jobId] = process
+            process.inputStream.bufferedReader().useLines { lines -> lines.forEach { log("FFmpeg: $it") } }
+            val code = process.waitFor()
+            ffmpegProcesses.remove(jobId)
+            if (code != 0 || !output.exists()) throw IllegalStateException("FFmpeg failed with exit code $code")
+            log("FFmpeg concat completed")
+
+            val saved = saveToDownloads(output, output.name)
+            writeStatus(dir, JSONObject().apply { put("status","completed"); put("percent",100); put("filename",saved.first); put("uri",saved.second); put("size",output.length()); put("speed",JSONObject.NULL) }.toString())
+            log("Final file saved: ${saved.first}")
+            videoFile.delete(); audioFile.delete(); output.delete()
+        } catch (e: Exception) {
+            if (jobStates[jobId] == "cancelled") { writeStatus(dir, "{\"status\":\"cancelled\",\"percent\":0}"); return }
+            log("VP9 pipeline FAILED: ${diagnostic(e)}", e)
+            exportLogToDownloads()
+            writeStatus(dir, JSONObject().apply { put("status","failed: ${diagnostic(e)}"); put("percent",0); put("error",diagnostic(e)) }.toString())
+        } finally { ffmpegProcesses.remove(jobId) }
+    }
+
+'''
+              if marker not in s:
+                  raise SystemExit('runJob marker not found')
+              s = s.replace(marker, fn + marker, 1)
+
+          # Dispatch only for YouTube VP9; AV1/H264 remain exact single-format downloads.
+          old = '''        try {
+            ensureEngine()
+            jobStates[jobId] = "running"'''
+          new = '''        try {
+            ensureEngine()
+            val requestedCodec = jobVideoCodecs[jobId]?.lowercase(Locale.US) ?: ""
+            if (isYoutubeUrl(baseRequestUrl(jobId)) && requestedCodec.contains("vp9")) {
+                runVp9Job(jobId)
+                return
+            }
+            jobStates[jobId] = "running"'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          if 'private fun baseRequestUrl' not in s:
+              helper = '''    private fun baseRequestUrl(jobId: String): String {
+        return jobs[jobId]?.let { dir -> jobRequests[jobId]?.let { req -> req.url } } ?: ""
+    }
+
+'''
+              s = s.replace('    private fun runJob(jobId: String) {\n', helper + '    private fun runJob(jobId: String) {\n', 1)
+
+          s = s.replace('jobRequests.remove(jobId)\n        jobCookieRequests.remove(jobId)\n        jobStates.remove(jobId)', 'jobRequests.remove(jobId)\n        jobCookieRequests.remove(jobId)\n        jobVideoCodecs.remove(jobId)\n        ffmpegProcesses.remove(jobId)\n        jobStates.remove(jobId)', 1)
+          s = s.replace('YoutubeDL.getInstance().destroyProcessById(id)\n                    writeStatus', 'YoutubeDL.getInstance().destroyProcessById(id)\n                    ffmpegProcesses[id]?.destroy()\n                    writeStatus')
+          kt.write_text(s)
+          print('Patch applied')
+          PY
+
+      - name: Verify changed sources
+        run: |
+          grep -q 'mdFormatSelect' index.html
+          grep -q 'runVp9Job' app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          grep -q 'jobVideoCodecs' app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          grep -q 'engineDetected' app/src/main/assets/api-compat.js
+
+      - name: Commit generated implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html app/src/main/assets/download-fix.js app/src/main/assets/api-compat.js app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          if git diff --cached --quiet; then
+            echo 'No generated changes to commit.'
+            exit 0
+          fi
+          git commit -m 'Implement exact format and VP9 audio merge pipeline'
+          git push origin youtube-quality-fallback
