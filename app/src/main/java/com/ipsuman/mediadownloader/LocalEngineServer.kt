@@ -346,6 +346,8 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val videoFile = dir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("video.") && !it.name.endsWith(".part") }
                 ?: throw IllegalStateException("Video download completed but no video file was found")
             log("Video download completed: ${videoFile.name}")
+            val savedVideo = saveToDownloads(videoFile, videoFile.name)
+            log("Video file saved before merge: ${savedVideo.first}")
 
             log("Audio download started: format 251")
             try {
@@ -358,6 +360,8 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val audioFile = dir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("audio.") && !it.name.endsWith(".part") }
                 ?: throw IllegalStateException("Audio download completed but no audio file was found")
             log("Audio 251 download completed: ${audioFile.name}")
+            val savedAudio = saveToDownloads(audioFile, audioFile.name)
+            log("Audio file saved before merge: ${savedAudio.first}")
 
             log("Waiting 3 seconds before FFmpeg concat")
             Thread.sleep(3000)
@@ -388,7 +392,11 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 .redirectErrorStream(true)
             val env = processBuilder.environment()
             val oldLd = env["LD_LIBRARY_PATH"]
-            env["LD_LIBRARY_PATH"] = if (oldLd.isNullOrBlank()) libDir.absolutePath else libDir.absolutePath + File.pathSeparator + oldLd
+            val nativeLibDir = context.applicationInfo.nativeLibraryDir
+            val ffmpegLdParts = listOf(libDir.absolutePath, nativeLibDir).distinct()
+            val ffmpegLd = ffmpegLdParts.joinToString(File.pathSeparator)
+            env["LD_LIBRARY_PATH"] = if (oldLd.isNullOrBlank()) ffmpegLd else ffmpegLd + File.pathSeparator + oldLd
+            log("FFmpeg LD_LIBRARY_PATH: ${env["LD_LIBRARY_PATH"]}")
             val process = processBuilder.start()
             ffmpegProcesses[jobId] = process
             process.inputStream.bufferedReader().useLines { lines -> lines.forEach { log("FFmpeg: $it") } }
@@ -631,6 +639,8 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     }
 
     private fun guessMime(name: String): String {
+        if (name.startsWith("audio.", ignoreCase = true)) return "audio/webm"
+        if (name.startsWith("video.", ignoreCase = true)) return "video/webm"
         return when (name.substringAfterLast('.', "").lowercase(Locale.US)) {
             "mp4" -> "video/mp4"
             "webm" -> "video/webm"
