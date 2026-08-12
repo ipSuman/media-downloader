@@ -30,6 +30,10 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     private val jobs = ConcurrentHashMap<String, File>()
     private val jobRequests = ConcurrentHashMap<String, YoutubeDLRequest>()
     private val jobCookieRequests = ConcurrentHashMap<String, YoutubeDLRequest>()
+    private val jobVideoCodecs = ConcurrentHashMap<String, String>()
+    private val jobFormats = ConcurrentHashMap<String, String>()
+    private val jobUrls = ConcurrentHashMap<String, String>()
+    private val ffmpegProcesses = ConcurrentHashMap<String, Process>()
     private val jobStates = ConcurrentHashMap<String, String>()
     private val preferences = context.getSharedPreferences("media_downloader", Context.MODE_PRIVATE)
     @Volatile private var engineReady = false
@@ -253,11 +257,105 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         }.toString())
     }
 
+    private fun runVp9Job(jobId: String) {
+        val dir = jobs[jobId] ?: return
+        val url = jobUrls[jobId] ?: return
+        val selectedFormat = jobFormats[jobId] ?: throw IllegalStateException("Selected format ID is missing")
+        val hasCookies = jobCookieRequests[jobId] != null
+        try {
+            log("Format selected: $selectedFormat")
+            log("Codec detected: VP9")
+            log("Audio selected: 251")
+            val videoPattern = File(dir, "video.%(ext)s")
+            val audioPattern = File(dir, "audio.%(ext)s")
+
+            fun partRequest(formatId: String, output: File, cookies: Boolean): YoutubeDLRequest {
+                return YoutubeDLRequest(url).apply {
+                    if (cookies) addAuthenticationOptions(this)
+                    addOption("-o", output.absolutePath)
+                    addOption("--no-mtime")
+                    addOption("--no-playlist")
+                    addOption("--retries", "3")
+                    addOption("--fragment-retries", "3")
+                    addOption("--socket-timeout", "30")
+                    addOption("--force-ipv4")
+                    addOption("--continue")
+                    addOption("-f", formatId)
+                }
+            }
+
+            fun executePart(request: YoutubeDLRequest, stage: String, base: Double, span: Double) {
+                YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
+                    writeProgress(dir, stage, base + progress.toDouble() * span, eta, line)
+                }
+            }
+
+            log("Video download started")
+            try {
+                executePart(partRequest(selectedFormat, videoPattern, false), "video", 0.0, 50.0)
+            } catch (first: Exception) {
+                if (!hasCookies) throw first
+                log("Video download failed; retrying exact format $selectedFormat with cookies", first)
+                executePart(partRequest(selectedFormat, videoPattern, true), "video-retry", 0.0, 50.0)
+            }
+            val videoFile = dir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("video.") && !it.name.endsWith(".part") }
+                ?: throw IllegalStateException("Video download completed but no video file was found")
+            log("Video download completed: ${videoFile.name}")
+
+            log("Audio download started: format 251")
+            try {
+                executePart(partRequest("251", audioPattern, false), "audio", 50.0, 40.0)
+            } catch (first: Exception) {
+                if (!hasCookies) throw first
+                log("Audio 251 download failed; retrying with cookies", first)
+                executePart(partRequest("251", audioPattern, true), "audio-retry", 50.0, 40.0)
+            }
+            val audioFile = dir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("audio.") && !it.name.endsWith(".part") }
+                ?: throw IllegalStateException("Audio 251 download completed but no audio file was found")
+            log("Audio 251 download completed: ${audioFile.name}")
+
+            log("Waiting 3 seconds before FFmpeg concat")
+            Thread.sleep(3000)
+            if (jobStates[jobId] == "cancelled") return
+
+            val ffmpeg = File(context.noBackupFilesDir, "youtubedl-android/packages/ffmpeg/usr/bin/ffmpeg")
+            if (!ffmpeg.exists()) throw IllegalStateException("Bundled FFmpeg executable not found: ${ffmpeg.absolutePath}")
+            val output = File(dir, "${videoFile.name.substringBeforeLast('.')}.webm")
+            log("FFmpeg concat started")
+            log("FFmpeg command: ${ffmpeg.absolutePath} -y -i ${videoFile.absolutePath} -i ${audioFile.absolutePath} -c:v copy -c:a copy ${output.absolutePath}")
+            val process = ProcessBuilder(ffmpeg.absolutePath, "-y", "-i", videoFile.absolutePath, "-i", audioFile.absolutePath, "-c:v", "copy", "-c:a", "copy", output.absolutePath)
+                .redirectErrorStream(true).start()
+            ffmpegProcesses[jobId] = process
+            process.inputStream.bufferedReader().useLines { lines -> lines.forEach { log("FFmpeg: $it") } }
+            val exitCode = process.waitFor()
+            ffmpegProcesses.remove(jobId)
+            if (exitCode != 0 || !output.exists()) throw IllegalStateException("FFmpeg failed with exit code $exitCode")
+            log("FFmpeg concat completed")
+
+            val saved = saveToDownloads(output, output.name)
+            writeStatus(dir, JSONObject().apply {
+                put("status", "completed"); put("percent", 100); put("filename", saved.first); put("uri", saved.second); put("size", output.length()); put("speed", JSONObject.NULL)
+            }.toString())
+            log("Final file saved: ${saved.first}")
+            videoFile.delete(); audioFile.delete(); output.delete()
+        } catch (e: Exception) {
+            if (jobStates[jobId] == "cancelled") return
+            log("VP9 pipeline FAILED", e)
+            exportLogToDownloads()
+            writeStatus(dir, JSONObject().apply { put("status", "failed: ${diagnostic(e)}"); put("percent", 0); put("error", diagnostic(e)) }.toString())
+        } finally { ffmpegProcesses.remove(jobId) }
+    }
+
     private fun runJob(jobId: String) {
         val dir = jobs[jobId] ?: return
         val request = jobRequests[jobId] ?: return
         try {
             ensureEngine()
+            val codec = jobVideoCodecs[jobId]?.lowercase(Locale.US) ?: ""
+            if (isYoutubeUrl(jobUrls[jobId] ?: "") && codec.contains("vp9")) {
+                runVp9Job(jobId)
+                return
+            }
             jobStates[jobId] = "running"
             writeProgress(dir, "starting", 0.0, null, "Starting download…")
             try {
@@ -352,8 +450,12 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val audioFormat = req.optString("audio_format", "").trim().lowercase(Locale.US)
             val audioQuality = req.optString("audio_quality", "").trim()
             val container = req.optString("merge_output_format", "").trim()
+            val videoCodec = req.optString("video_codec", "").trim()
             jobs[jobId] = dir
             jobStates[jobId] = "running"
+            jobVideoCodecs[jobId] = videoCodec
+            jobFormats[jobId] = format
+            jobUrls[jobId] = url
             val youtube = isYoutubeUrl(url)
             jobRequests[jobId] = buildRequest(
                 jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container,
@@ -395,6 +497,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     }
                     jobStates[id] = "paused"
                     YoutubeDL.getInstance().destroyProcessById(id)
+                    ffmpegProcesses[id]?.destroy()
                     writeStatus(dir, """{"status":"paused","percent":${readPercent(dir)}}""")
                     log("Pause requested for download $id")
                 }
@@ -413,6 +516,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     }
                     jobStates[id] = "cancelled"
                     YoutubeDL.getInstance().destroyProcessById(id)
+                    ffmpegProcesses[id]?.destroy()
                     writeStatus(dir, """{"status":"cancelled","percent":0}""")
                     log("Cancel requested for download $id")
                 }
@@ -488,6 +592,10 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         val dir = jobs.remove(jobId)
         jobRequests.remove(jobId)
         jobCookieRequests.remove(jobId)
+        jobVideoCodecs.remove(jobId)
+        jobFormats.remove(jobId)
+        jobUrls.remove(jobId)
+        ffmpegProcesses.remove(jobId)
         jobStates.remove(jobId)
         if (deleteFiles) dir?.deleteRecursively()
     }

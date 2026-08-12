@@ -21,11 +21,13 @@
     return "video";
   }
 
-  function videoSelector(label) {
-    const match = String(label || "").match(/(2160|1440|1080|720|480|360)/);
-    if (!match) return "bv*+ba/b";
-    const h = match[1];
-    return `bv*[height=${h}]+ba/b[height=${h}]`;
+  function videoSelector(label) { return String(label || "").trim() || "bv*+ba/b"; }
+
+  function selectedVideoFormat() {
+    const select = document.getElementById("mdFormatSelect");
+    if (!select || !select.value) return { id: "bv*+ba/b", codec: "" };
+    const option = select.options[select.selectedIndex];
+    return { id: String(select.value), codec: String(option?.dataset?.vcodec || "") };
   }
 
   function audioSelector(format) {
@@ -151,12 +153,15 @@
     let audioFormat = "";
     let audioQuality = "";
     let mergeOutputFormat = "";
+    let videoCodec = "";
 
     if (mode === "video") {
       const selects = byId("videoOptions")?.querySelectorAll("select") || [];
-      const quality = selects[0]?.value || "Best available";
+      const chosen = selectedVideoFormat();
+      const quality = chosen.id;
       const container = selects[1]?.value || "Auto";
       format = videoSelector(quality);
+      videoCodec = chosen.codec;
       if (container !== "Auto") mergeOutputFormat = container.toLowerCase();
     } else if (mode === "audio") {
       const selects = byId("audioOptions")?.querySelectorAll("select") || [];
@@ -194,6 +199,7 @@
         audio_format: audioFormat,
         audio_quality: audioQuality,
         merge_output_format: mergeOutputFormat,
+        video_codec: videoCodec,
         subtitles, thumbnail, metadata
       };
       console.log("Media Downloader: sending download request", payload);
