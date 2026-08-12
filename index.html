@@ -1156,6 +1156,31 @@ function showMediaInfo(data){
 
   formats.innerHTML = "";
 
+  if (!document.getElementById("mdFormatSelect")) {
+    const label = document.createElement("div");
+    label.textContent = "Video format (exact yt-dlp ID)";
+    label.style.cssText = "margin:12px 0 6px;font-weight:800";
+    const select = document.createElement("select");
+    select.id = "mdFormatSelect";
+    select.style.cssText = "width:100%;padding:10px;border-radius:10px;background:var(--panel,#151515);color:var(--text,#fff);border:1px solid var(--border,#333);font-weight:700";
+    formats.parentNode.insertBefore(label, formats);
+    formats.parentNode.insertBefore(select, formats);
+  }
+  const mdSelect = document.getElementById("mdFormatSelect");
+  if (mdSelect) {
+    mdSelect.innerHTML = "";
+    const videoFormats = (data.formats || [])
+      .filter(f => f.vcodec && f.vcodec !== "none" && Number(f.height || 0) > 0)
+      .sort((a,b) => Number(b.height||0)-Number(a.height||0) || Number(b.fps||0)-Number(a.fps||0));
+    videoFormats.forEach(f => {
+      const o = document.createElement("option");
+      o.value = String(f.format_id || "");
+      o.dataset.vcodec = String(f.vcodec || "");
+      o.textContent = `ID ${f.format_id} — ${f.height}p ${f.vcodec}${f.fps ? ` • ${f.fps}fps` : ""}${f.ext ? ` • ${f.ext}` : ""}`;
+      mdSelect.appendChild(o);
+    });
+  }
+
   const qualitySelect = document.getElementById("videoQualitySelect");
   if (qualitySelect) {
     qualitySelect.innerHTML = "";

@@ -36,6 +36,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     private val ffmpegProcesses = ConcurrentHashMap<String, Process>()
     private val jobStates = ConcurrentHashMap<String, String>()
     private val preferences = context.getSharedPreferences("media_downloader", Context.MODE_PRIVATE)
+    private val poTokenProvider = YoutubePoTokenProvider(context)
     @Volatile private var engineReady = false
     @Volatile private var updateAttempted = false
 
@@ -103,6 +104,25 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         if (cookies != null) {
             request.addOption("--cookies", cookies.absolutePath)
             log("Using imported YouTube cookies for yt-dlp authentication")
+        }
+        addYoutubePoToken(request)
+    }
+
+    private fun addYoutubePoToken(request: YoutubeDLRequest) {
+        try {
+            val token = poTokenProvider.getMwebGvsToken()
+            if (!token.isNullOrBlank()) {
+                request.addOption(
+                    "--extractor-args",
+                    "youtube:player-client=default,mweb;po_token=mweb.gvs+$token"
+                )
+                request.addOption("--extractor-args", "youtube:pot_trace=true")
+                log("Generated and attached mweb GVS PO Token for YouTube")
+            } else {
+                log("PO Token provider unavailable; continuing without PO Token: ${poTokenProvider.lastError() ?: "unknown"}")
+            }
+        } catch (e: Exception) {
+            log("PO Token generation failed; continuing without PO Token", e)
         }
     }
 
@@ -212,7 +232,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     ): YoutubeDLRequest {
         val dir = jobs[jobId] ?: throw IllegalStateException("Unknown download job")
         return YoutubeDLRequest(url).apply {
-            if (useCookies) addAuthenticationOptions(this)
+            if (useCookies) addAuthenticationOptions(this) else addYoutubePoToken(this)
             addOption("-o", File(dir, "%(title)s [%(id)s].%(ext)s").absolutePath)
             addOption("--no-mtime")
             addOption("--no-playlist")
@@ -296,7 +316,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
 
             fun partRequest(formatId: String, output: File, cookies: Boolean): YoutubeDLRequest {
                 return YoutubeDLRequest(url).apply {
-                    if (cookies) addAuthenticationOptions(this)
+                    if (cookies) addAuthenticationOptions(this) else addYoutubePoToken(this)
                     addOption("-o", output.absolutePath)
                     addOption("--no-mtime")
                     addOption("--no-playlist")
@@ -498,8 +518,12 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val audioQuality = req.optString("audio_quality", "").trim()
             val container = req.optString("merge_output_format", "").trim()
             val videoCodec = req.optString("video_codec", "").trim()
+            val videoCodec = req.optString("video_codec", "").trim()
             jobs[jobId] = dir
             jobStates[jobId] = "running"
+            jobVideoCodecs[jobId] = videoCodec
+            jobFormats[jobId] = format
+            jobUrls[jobId] = url
             jobVideoCodecs[jobId] = videoCodec
             jobFormats[jobId] = format
             jobUrls[jobId] = url
