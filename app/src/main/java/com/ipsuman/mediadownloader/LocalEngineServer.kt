@@ -29,8 +29,14 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     private val executor = Executors.newCachedThreadPool()
     private val jobs = ConcurrentHashMap<String, File>()
     private val jobRequests = ConcurrentHashMap<String, YoutubeDLRequest>()
+    private val jobCookieRequests = ConcurrentHashMap<String, YoutubeDLRequest>()
+    private val jobVideoCodecs = ConcurrentHashMap<String, String>()
+    private val jobFormats = ConcurrentHashMap<String, String>()
+    private val jobUrls = ConcurrentHashMap<String, String>()
+    private val ffmpegProcesses = ConcurrentHashMap<String, Process>()
     private val jobStates = ConcurrentHashMap<String, String>()
     private val preferences = context.getSharedPreferences("media_downloader", Context.MODE_PRIVATE)
+    private val poTokenProvider = YoutubePoTokenProvider(context)
     @Volatile private var engineReady = false
     @Volatile private var updateAttempted = false
 
@@ -99,6 +105,33 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             request.addOption("--cookies", cookies.absolutePath)
             log("Using imported YouTube cookies for yt-dlp authentication")
         }
+        addYoutubePoToken(request)
+    }
+
+    private fun addYoutubePoToken(request: YoutubeDLRequest) {
+        try {
+            val token = poTokenProvider.getMwebGvsToken()
+            val visitorData = poTokenProvider.visitorData()
+            if (!visitorData.isNullOrBlank()) {
+                request.addOption(
+                    "--extractor-args",
+                    "youtube:visitor_data=$visitorData"
+                )
+                log("Attached Innertube visitorData to YouTube request")
+            }
+            if (!token.isNullOrBlank()) {
+                request.addOption(
+                    "--extractor-args",
+                    "youtube:player-client=mweb;visitor_data=$visitorData;po_token=mweb.gvs+$token"
+                )
+                request.addOption("--extractor-args", "youtube:pot_trace=true")
+                log("Generated and attached mweb GVS PO Token for YouTube")
+            } else {
+                log("PO Token provider unavailable; continuing without PO Token: ${poTokenProvider.lastError() ?: "unknown"}")
+            }
+        } catch (e: Exception) {
+            log("PO Token generation failed; continuing without PO Token", e)
+        }
     }
 
     private fun cors(r: Response): Response {
@@ -136,7 +169,9 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             if (url.isEmpty()) return json(Response.Status.BAD_REQUEST, """{"ok":false,"error":"URL is required"}""")
             log("Analyzing URL with Android yt-dlp: $url")
             ensureEngine()
-            val request = YoutubeDLRequest(url).apply { addAuthenticationOptions(this) }
+            // Analyze without imported cookies so YouTube exposes the full public format catalogue.
+            // Cookies remain available for the download retry path below.
+            val request = YoutubeDLRequest(url)
             val info: VideoInfo = YoutubeDL.getInstance().getInfo(request)
             val formats = JSONArray()
             for (fmt in info.formats.orEmpty()) {
@@ -200,11 +235,12 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         audioOnly: Boolean,
         audioFormat: String,
         audioQuality: String,
-        container: String
+        container: String,
+        useCookies: Boolean = true
     ): YoutubeDLRequest {
         val dir = jobs[jobId] ?: throw IllegalStateException("Unknown download job")
         return YoutubeDLRequest(url).apply {
-            addAuthenticationOptions(this)
+            if (useCookies) addAuthenticationOptions(this) else addYoutubePoToken(this)
             addOption("-o", File(dir, "%(title)s [%(id)s].%(ext)s").absolutePath)
             addOption("--no-mtime")
             addOption("--no-playlist")
@@ -242,11 +278,173 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         val speed = extractSpeed(line)
         writeStatus(dir, JSONObject().apply {
             put("status", state)
-            put("percent", progress.toInt().coerceIn(0, 100))
+            val safeProgress = progress.toInt().coerceIn(0, 100)
+            put("percent", if (state == "completed") 100 else safeProgress.coerceAtMost(99))
             put("eta", eta ?: JSONObject.NULL)
             put("speed", speed ?: JSONObject.NULL)
             put("message", line ?: "")
         }.toString())
+    }
+
+    private fun resolveBundledFfmpeg(root: File): File? {
+        // youtubedl-android 0.18.1 deliberately ships the runnable FFmpeg
+        // binary as libffmpeg.so in the APK's nativeLibraryDir. The
+        // libffmpeg.zip.so file is only the archive used by FFmpeg.init().
+        // FFmpeg's own YoutubeDL implementation also points yt-dlp at this
+        // native binary, so use the same path for our direct ProcessBuilder.
+        val nativeFfmpeg = File(context.applicationInfo.nativeLibraryDir, "libffmpeg.so")
+        if (nativeFfmpeg.isFile && nativeFfmpeg.canRead()) return nativeFfmpeg
+
+        // Fallbacks retained for diagnostic compatibility with older package layouts.
+        val preferred = listOf(
+            File(root, "usr/bin/ffmpeg"),
+            File(root, "usr/lib/ffmpeg"),
+            File(root, "ffmpeg")
+        )
+        preferred.firstOrNull { it.isFile && it.canRead() }?.let { return it }
+        if (root.exists()) {
+            root.walkTopDown().firstOrNull {
+                it.isFile && it.name == "ffmpeg" && it.canRead()
+            }?.let { return it }
+        }
+        return null
+    }
+
+
+    private fun nativeLibDirForFfmpeg(): File = File(context.applicationInfo.nativeLibraryDir)
+
+    private fun runVp9Job(jobId: String) {
+        val dir = jobs[jobId] ?: return
+        val url = jobUrls[jobId] ?: return
+        val selectedFormat = jobFormats[jobId] ?: throw IllegalStateException("Selected format ID is missing")
+        val hasCookies = jobCookieRequests[jobId] != null
+        try {
+            log("Format selected: $selectedFormat")
+            log("Codec detected: VP9")
+            log("Audio selected: 251")
+            val videoPattern = File(dir, "video.%(ext)s")
+            val audioPattern = File(dir, "audio.%(ext)s")
+
+            fun partRequest(formatId: String, output: File, cookies: Boolean): YoutubeDLRequest {
+                return YoutubeDLRequest(url).apply {
+                    if (cookies) addAuthenticationOptions(this) else addYoutubePoToken(this)
+                    addOption("-o", output.absolutePath)
+                    addOption("--no-mtime")
+                    addOption("--no-playlist")
+                    addOption("--retries", "3")
+                    addOption("--fragment-retries", "3")
+                    addOption("--socket-timeout", "30")
+                    addOption("--force-ipv4")
+                    addOption("--continue")
+                    addOption("-f", formatId)
+                }
+            }
+
+            fun executePart(request: YoutubeDLRequest, stage: String, base: Double, span: Double) {
+                YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
+                    writeProgress(dir, stage, base + progress.toDouble() * span, eta, line)
+                }
+            }
+
+            log("Video download started")
+            try {
+                executePart(partRequest(selectedFormat, videoPattern, false), "video", 0.0, 50.0)
+            } catch (first: Exception) {
+                if (!hasCookies) throw first
+                log("Video download failed; retrying exact format $selectedFormat with cookies", first)
+                executePart(partRequest(selectedFormat, videoPattern, true), "video-retry", 0.0, 50.0)
+            }
+            val videoFile = dir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("video.") && !it.name.endsWith(".part") }
+                ?: throw IllegalStateException("Video download completed but no video file was found")
+            log("Video download completed: ${videoFile.name}")
+            val savedVideo = saveToDownloads(videoFile, videoFile.name)
+            log("Video file saved before merge: ${savedVideo.first}")
+
+            log("Audio download started: format 251")
+            try {
+                executePart(partRequest("251", audioPattern, false), "audio", 50.0, 40.0)
+            } catch (first: Exception) {
+                if (!hasCookies) throw first
+                log("Audio 251 download failed; retrying with cookies", first)
+                executePart(partRequest("251", audioPattern, true), "audio-retry", 50.0, 40.0)
+            }
+            val audioFile = dir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("audio.") && !it.name.endsWith(".part") }
+                ?: throw IllegalStateException("Audio download completed but no audio file was found")
+            log("Audio 251 download completed: ${audioFile.name}")
+            val savedAudio = saveToDownloads(audioFile, audioFile.name)
+            log("Audio file saved before merge: ${savedAudio.first}")
+
+            log("Waiting 3 seconds before FFmpeg concat")
+            Thread.sleep(3000)
+            if (jobStates[jobId] == "cancelled") return
+
+            val ffmpegRoot = File(context.noBackupFilesDir, "youtubedl-android/packages/ffmpeg")
+            val ffmpeg = resolveBundledFfmpeg(ffmpegRoot)
+            if (ffmpeg == null) {
+                val entries = if (ffmpegRoot.exists()) ffmpegRoot.walkTopDown().take(80).joinToString(",") { it.relativeTo(ffmpegRoot).path } else "<ffmpeg package root missing>"
+                val nativeEntries = File(context.applicationInfo.nativeLibraryDir).listFiles()?.joinToString(",") { it.name } ?: "<none>"
+                throw IllegalStateException("Bundled FFmpeg executable not found; root=${ffmpegRoot.absolutePath}; entries=$entries; nativeLibs=$nativeEntries")
+            }
+            ffmpeg.setExecutable(true, false)
+            val output = File(dir, "merged.webm")
+            val extractedLibDir = File(ffmpegRoot, "usr/lib")
+            val libDir = if (extractedLibDir.isDirectory) extractedLibDir else (ffmpeg.parentFile ?: ffmpegRoot)
+            // fontconfig in the bundled FFmpeg package depends on libexpat.so.1.
+            // Copy the Android-native Expat library into the same directory as
+            // the other FFmpeg libraries so Android can resolve the dependency
+            // before the process enters the FFmpeg linker namespace.
+            val packagedExpat = File(nativeLibDirForFfmpeg(), "libexpat.so")
+            val ffmpegExpat = File(libDir, "libexpat.so.1")
+            if (packagedExpat.isFile && packagedExpat.length() > 0L) {
+                if (!ffmpegExpat.isFile || ffmpegExpat.length() != packagedExpat.length()) {
+                    FileInputStream(packagedExpat).use { input ->
+                        FileOutputStream(ffmpegExpat).use { output -> input.copyTo(output) }
+                    }
+                    ffmpegExpat.setReadable(true, false)
+                }
+                log("FFmpeg Expat runtime prepared: ${ffmpegExpat.absolutePath} size=${ffmpegExpat.length()}")
+            } else {
+                log("FFmpeg Expat runtime missing from nativeLibraryDir: ${packagedExpat.absolutePath}")
+            }
+            log("FFmpeg executable resolved: ${ffmpeg.absolutePath}")
+            log("FFmpeg executable exists=${ffmpeg.exists()} executable=${ffmpeg.canExecute()} size=${ffmpeg.length()}")
+            log("FFmpeg library directory: ${libDir.absolutePath}")
+            log("FFmpeg library directory exists=${libDir.isDirectory}")
+            if (libDir.isDirectory) {
+                val libs = libDir.listFiles()?.filter { it.isFile && it.name.endsWith(".so") }?.take(30)?.joinToString(",") { it.name } ?: "<none>"
+                log("FFmpeg bundled libraries: $libs")
+            }
+            log("FFmpeg concat started")
+            log("FFmpeg command: ${ffmpeg.absolutePath} -y -i ${videoFile.absolutePath} -i ${audioFile.absolutePath} -map 0:v:0 -map 1:a:0 -c:v copy -c:a copy -shortest ${output.absolutePath}")
+            val processBuilder = ProcessBuilder(ffmpeg.absolutePath, "-y", "-i", videoFile.absolutePath, "-i", audioFile.absolutePath, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy", "-shortest", output.absolutePath)
+                .redirectErrorStream(true)
+            val env = processBuilder.environment()
+            val oldLd = env["LD_LIBRARY_PATH"]
+            val nativeLibDir = context.applicationInfo.nativeLibraryDir
+            val ffmpegLdParts = listOf(libDir.absolutePath, nativeLibDir).distinct()
+            val ffmpegLd = ffmpegLdParts.joinToString(File.pathSeparator)
+            env["LD_LIBRARY_PATH"] = if (oldLd.isNullOrBlank()) ffmpegLd else ffmpegLd + File.pathSeparator + oldLd
+            log("FFmpeg LD_LIBRARY_PATH: ${env["LD_LIBRARY_PATH"]}")
+            val process = processBuilder.start()
+            ffmpegProcesses[jobId] = process
+            process.inputStream.bufferedReader().useLines { lines -> lines.forEach { log("FFmpeg: $it") } }
+            val exitCode = process.waitFor()
+            ffmpegProcesses.remove(jobId)
+            if (exitCode != 0 || !output.exists()) throw IllegalStateException("FFmpeg failed with exit code $exitCode")
+            log("FFmpeg concat completed")
+
+            val saved = saveToDownloads(output, output.name)
+            writeStatus(dir, JSONObject().apply {
+                put("status", "completed"); put("percent", 100); put("filename", saved.first); put("uri", saved.second); put("size", output.length()); put("speed", JSONObject.NULL)
+            }.toString())
+            log("Final file saved: ${saved.first}")
+            videoFile.delete(); audioFile.delete(); output.delete()
+        } catch (e: Exception) {
+            if (jobStates[jobId] == "cancelled") return
+            log("VP9 pipeline FAILED", e)
+            exportLogToDownloads()
+            writeStatus(dir, JSONObject().apply { put("status", "failed: ${diagnostic(e)}"); put("percent", 0); put("error", diagnostic(e)) }.toString())
+        } finally { ffmpegProcesses.remove(jobId) }
     }
 
     private fun runJob(jobId: String) {
@@ -254,11 +452,31 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         val request = jobRequests[jobId] ?: return
         try {
             ensureEngine()
+            val codec = jobVideoCodecs[jobId]?.lowercase(Locale.US) ?: ""
+            if (isYoutubeUrl(jobUrls[jobId] ?: "") && codec.contains("vp9")) {
+                runVp9Job(jobId)
+                return
+            }
             jobStates[jobId] = "running"
             writeProgress(dir, "starting", 0.0, null, "Starting download…")
-            YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
-                val state = jobStates[jobId] ?: "running"
-                writeProgress(dir, state, progress.toDouble(), eta, line)
+            try {
+                YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
+                    val state = jobStates[jobId] ?: "running"
+                    writeProgress(dir, state, progress.toDouble(), eta, line)
+                }
+            } catch (firstError: Exception) {
+                val cookieRequest = jobCookieRequests[jobId]
+                val canRetryWithCookies = cookieRequest != null &&
+                    jobStates[jobId] != "paused" && jobStates[jobId] != "cancelled"
+                if (!canRetryWithCookies) throw firstError
+                log("Initial YouTube download failed; retrying the same selected format with imported cookies", firstError)
+                jobStates[jobId] = "retrying"
+                writeProgress(dir, "retrying", readPercent(dir).toDouble(), null,
+                    "Retrying with imported YouTube cookies…")
+                YoutubeDL.getInstance().execute(cookieRequest!!, jobId) { progress, eta, line ->
+                    val state = jobStates[jobId] ?: "running"
+                    writeProgress(dir, state, progress.toDouble(), eta, line)
+                }
             }
             when (jobStates[jobId]) {
                 "paused" -> {
@@ -324,7 +542,9 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val url = req.optString("url", "").trim()
             if (url.isEmpty()) return json(Response.Status.BAD_REQUEST, """{"ok":false,"error":"URL is required"}""")
             val jobId = UUID.randomUUID().toString().replace("-", "").take(12)
-            val dir = File(context.cacheDir, "media-downloads/$jobId")
+            // Jobs contain active media and must not live in Android's cache directory,
+            // which the OS may delete while a long download is still running.
+            val dir = File(context.filesDir, "media-downloads/$jobId")
             if (!dir.mkdirs() && !dir.isDirectory) throw IllegalStateException("Could not create download directory")
             val format = req.optString("format", "").trim()
             val start = req.optString("start", "").trim()
@@ -333,9 +553,23 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val audioFormat = req.optString("audio_format", "").trim().lowercase(Locale.US)
             val audioQuality = req.optString("audio_quality", "").trim()
             val container = req.optString("merge_output_format", "").trim()
+            val videoCodec = req.optString("video_codec", "").trim()
             jobs[jobId] = dir
             jobStates[jobId] = "running"
-            jobRequests[jobId] = buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container)
+            jobVideoCodecs[jobId] = videoCodec
+            jobFormats[jobId] = format
+            jobUrls[jobId] = url
+            val youtube = isYoutubeUrl(url)
+            jobRequests[jobId] = buildRequest(
+                jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container,
+                useCookies = !youtube
+            )
+            if (youtube && youtubeCookiesFile() != null) {
+                jobCookieRequests[jobId] = buildRequest(
+                    jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container,
+                    useCookies = true
+                )
+            }
             writeStatus(dir, """{"status":"starting","percent":0,"speed":null}""")
             log("Starting download $jobId: format=$format audioOnly=$audioOnly section=$start-$end")
             executor.execute { runJob(jobId) }
@@ -366,6 +600,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     }
                     jobStates[id] = "paused"
                     YoutubeDL.getInstance().destroyProcessById(id)
+                    ffmpegProcesses[id]?.destroy()
                     writeStatus(dir, """{"status":"paused","percent":${readPercent(dir)}}""")
                     log("Pause requested for download $id")
                 }
@@ -384,6 +619,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     }
                     jobStates[id] = "cancelled"
                     YoutubeDL.getInstance().destroyProcessById(id)
+                    ffmpegProcesses[id]?.destroy()
                     writeStatus(dir, """{"status":"cancelled","percent":0}""")
                     log("Cancel requested for download $id")
                 }
@@ -431,6 +667,8 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     }
 
     private fun guessMime(name: String): String {
+        if (name.startsWith("audio.", ignoreCase = true)) return "audio/webm"
+        if (name.startsWith("video.", ignoreCase = true)) return "video/webm"
         return when (name.substringAfterLast('.', "").lowercase(Locale.US)) {
             "mp4" -> "video/mp4"
             "webm" -> "video/webm"
@@ -444,12 +682,31 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     }
 
     private fun writeStatus(dir: File, json: String) {
-        try { File(dir, "android_status.json").writeText(json) } catch (e: Exception) { log("Could not write job status", e) }
+        try {
+            if (!dir.exists() && !dir.mkdirs()) {
+                log("Could not create job directory for status: ${dir.absolutePath}")
+                return
+            }
+            File(dir, "android_status.json").writeText(json)
+        } catch (e: Exception) { log("Could not write job status", e) }
+    }
+
+    private fun isYoutubeUrl(url: String): Boolean {
+        return try {
+            val host = java.net.URI(url).host?.lowercase(Locale.US) ?: return false
+            host == "youtube.com" || host.endsWith(".youtube.com") ||
+                host == "youtu.be" || host.endsWith(".youtu.be")
+        } catch (_: Exception) { false }
     }
 
     private fun cleanupJob(jobId: String, deleteFiles: Boolean) {
         val dir = jobs.remove(jobId)
         jobRequests.remove(jobId)
+        jobCookieRequests.remove(jobId)
+        jobVideoCodecs.remove(jobId)
+        jobFormats.remove(jobId)
+        jobUrls.remove(jobId)
+        ffmpegProcesses.remove(jobId)
         jobStates.remove(jobId)
         if (deleteFiles) dir?.deleteRecursively()
     }
