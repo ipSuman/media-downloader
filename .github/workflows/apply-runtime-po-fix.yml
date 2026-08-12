@@ -1,0 +1,49 @@
+name: Apply runtime and PO token fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - youtube-quality-fallback
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt')
+          s = p.read_text()
+          old = '"youtube:player-client=default,mweb;po_token=mweb.gvs+$token"'
+          new = '"youtube:player-client=mweb;visitor_data=$visitorData;po_token=mweb.gvs+$token"'
+          if old not in s:
+              raise SystemExit('Expected PO-token extractor-args string was not found')
+          s = s.replace(old, new, 1)
+          marker = '            log("FFmpeg executable resolved: ${ffmpeg.absolutePath}")'
+          insertion = '''            // fontconfig in the bundled FFmpeg package depends on libexpat.so.1.\n            // Copy the Android-native Expat library into the same directory as\n            // the other FFmpeg libraries so Android can resolve the dependency\n            // before the process enters the FFmpeg linker namespace.\n            val packagedExpat = File(nativeLibDirForFfmpeg(), "libexpat.so.1")\n            val ffmpegExpat = File(libDir, "libexpat.so.1")\n            if (packagedExpat.isFile && packagedExpat.length() > 0L) {\n                if (!ffmpegExpat.isFile || ffmpegExpat.length() != packagedExpat.length()) {\n                    FileInputStream(packagedExpat).use { input ->\n                        FileOutputStream(ffmpegExpat).use { output -> input.copyTo(output) }\n                    }\n                    ffmpegExpat.setReadable(true, false)\n                }\n                log("FFmpeg Expat runtime prepared: ${ffmpegExpat.absolutePath} size=${ffmpegExpat.length()}")\n            } else {\n                log("FFmpeg Expat runtime missing from nativeLibraryDir: ${packagedExpat.absolutePath}")\n            }\n'''
+          if marker not in s:
+              raise SystemExit('FFmpeg insertion marker not found')
+          if 'private fun nativeLibDirForFfmpeg()' not in s:
+              helper = '''\n    private fun nativeLibDirForFfmpeg(): File = File(context.applicationInfo.nativeLibraryDir)\n\n'''
+              s = s.replace('    private fun runVp9Job(jobId: String) {', helper + '    private fun runVp9Job(jobId: String) {', 1)
+          s = s.replace(marker, insertion + marker, 1)
+          p.write_text(s)
+
+      - name: Remove temporary patch workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          git rm .github/workflows/apply-runtime-po-fix.yml
+          git commit -m "Fix mweb PO token binding and FFmpeg Expat runtime"
+          git push
