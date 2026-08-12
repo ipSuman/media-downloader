@@ -122,7 +122,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             if (!token.isNullOrBlank()) {
                 request.addOption(
                     "--extractor-args",
-                    "youtube:player-client=default,mweb;po_token=mweb.gvs+$token"
+                    "youtube:player-client=mweb;visitor_data=$visitorData;po_token=mweb.gvs+$token"
                 )
                 request.addOption("--extractor-args", "youtube:pot_trace=true")
                 log("Generated and attached mweb GVS PO Token for YouTube")
@@ -310,6 +310,9 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         return null
     }
 
+
+    private fun nativeLibDirForFfmpeg(): File = File(context.applicationInfo.nativeLibraryDir)
+
     private fun runVp9Job(jobId: String) {
         val dir = jobs[jobId] ?: return
         val url = jobUrls[jobId] ?: return
@@ -386,6 +389,23 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val output = File(dir, "merged.webm")
             val extractedLibDir = File(ffmpegRoot, "usr/lib")
             val libDir = if (extractedLibDir.isDirectory) extractedLibDir else (ffmpeg.parentFile ?: ffmpegRoot)
+            // fontconfig in the bundled FFmpeg package depends on libexpat.so.1.
+            // Copy the Android-native Expat library into the same directory as
+            // the other FFmpeg libraries so Android can resolve the dependency
+            // before the process enters the FFmpeg linker namespace.
+            val packagedExpat = File(nativeLibDirForFfmpeg(), "libexpat.so.1")
+            val ffmpegExpat = File(libDir, "libexpat.so.1")
+            if (packagedExpat.isFile && packagedExpat.length() > 0L) {
+                if (!ffmpegExpat.isFile || ffmpegExpat.length() != packagedExpat.length()) {
+                    FileInputStream(packagedExpat).use { input ->
+                        FileOutputStream(ffmpegExpat).use { output -> input.copyTo(output) }
+                    }
+                    ffmpegExpat.setReadable(true, false)
+                }
+                log("FFmpeg Expat runtime prepared: ${ffmpegExpat.absolutePath} size=${ffmpegExpat.length()}")
+            } else {
+                log("FFmpeg Expat runtime missing from nativeLibraryDir: ${packagedExpat.absolutePath}")
+            }
             log("FFmpeg executable resolved: ${ffmpeg.absolutePath}")
             log("FFmpeg executable exists=${ffmpeg.exists()} executable=${ffmpeg.canExecute()} size=${ffmpeg.length()}")
             log("FFmpeg library directory: ${libDir.absolutePath}")
