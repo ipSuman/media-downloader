@@ -1,0 +1,31 @@
+name: Apply visitorData source fix
+
+on:
+  push:
+    branches:
+      - youtube-quality-fallback
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply source patch
+        run: python3 tools/apply-visitor-data-fix.py
+      - name: Commit source patch
+        run: |
+          if git diff --quiet; then
+            echo "Source already patched"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          git commit -m "Pass visitorData with YouTube PO token"
+          git push
