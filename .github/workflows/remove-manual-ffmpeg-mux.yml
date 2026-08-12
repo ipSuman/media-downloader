@@ -1,6 +1,9 @@
 name: Remove manual FFmpeg mux path
 
 on:
+  push:
+    paths:
+      - '.github/workflows/remove-manual-ffmpeg-mux.yml'
   workflow_dispatch:
 
 permissions:
@@ -13,7 +16,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Remove legacy manual FFmpeg VP9 mux implementation
         shell: bash
         run: |
@@ -23,53 +25,32 @@ jobs:
           from pathlib import Path
           p=Path('app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt')
           s=p.read_text()
-
-          # Remove only the legacy manual FFmpeg helpers and VP9 two-step mux job.
           start=s.index('    private fun resolveBundledFfmpeg(')
           end=s.index('    private fun runJob(jobId: String) {', start)
           s=s[:start]+s[end:]
-
-          # Remove the now-unused manual-process state and imports.
-          s=s.replace('import java.io.FileInputStream\n','')
-          s=s.replace('import java.io.FileOutputStream\n','')
+          s=s.replace('import java.io.FileInputStream\n','').replace('import java.io.FileOutputStream\n','')
           s=s.replace('    private val ffmpegProcesses = ConcurrentHashMap<String, Process>()\n','')
-
-          # With yt-dlp receiving the combined selector directly, no backend VP9
-          # interception is needed. Keep runJob as the single execution path.
           old='''            ensureEngine()\n            val codec = jobVideoCodecs[jobId]?.lowercase(Locale.US) ?: ""\n            if (isYoutubeUrl(jobUrls[jobId] ?: "") && codec.contains("vp9") && !jobFormats[jobId].orEmpty().contains("+")) {\n                runVp9Job(jobId)\n                return\n            }\n            jobStates[jobId] = "running"\n'''
           new='''            ensureEngine()\n            jobStates[jobId] = "running"\n'''
           if old not in s: raise SystemExit('runJob VP9 interception block not found')
           s=s.replace(old,new,1)
-
-          # These maps existed only for the removed manual VP9 mux path.
-          s=s.replace('    private val jobVideoCodecs = ConcurrentHashMap<String, String>()\n','')
-          s=s.replace('    private val jobFormats = ConcurrentHashMap<String, String>()\n','')
-          s=s.replace('    private val jobUrls = ConcurrentHashMap<String, String>()\n','')
-
-          # Remove assignments to the deleted maps, preserving all request handling.
           for line in [
+              '    private val jobVideoCodecs = ConcurrentHashMap<String, String>()\n',
+              '    private val jobFormats = ConcurrentHashMap<String, String>()\n',
+              '    private val jobUrls = ConcurrentHashMap<String, String>()\n',
               '            jobVideoCodecs[jobId] = videoCodec\n',
               '            jobFormats[jobId] = format\n',
               '            jobUrls[jobId] = url\n',
               '        jobVideoCodecs.remove(jobId)\n',
               '        jobFormats.remove(jobId)\n',
-              '        jobUrls.remove(jobId)\n',
-          ]:
+              '        jobUrls.remove(jobId)\n']:
               s=s.replace(line,'')
-
-          # Authentication is synchronized; refresh the existing cookie retry's
-          # token+visitor pair immediately before execution. The request is the
-          # same selected format and output configuration, and authentication is
-          # prepared before the retry begins.
           old='''                addAuthenticationOptions(cookieRequest!!)\n                log("PO Token and visitorData ready before cookie retry")\n                YoutubeDL.getInstance().execute(cookieRequest, jobId) { progress, eta, line ->\n'''
           new='''                val retryRequest = cookieRequest!!\n                addAuthenticationOptions(retryRequest)\n                log("PO Token and visitorData ready before cookie retry")\n                YoutubeDL.getInstance().execute(retryRequest, jobId) { progress, eta, line ->\n'''
           if old not in s: raise SystemExit('cookie retry block not found')
           s=s.replace(old,new,1)
-
           p.write_text(s)
           PY
-
-          # Ensure no manual mux implementation remains.
           ! grep -q 'runVp9Job\|resolveBundledFfmpeg\|ProcessBuilder(ffmpeg\|ffmpegProcesses\|FFmpeg command:' "$FILE"
           ! grep -q 'jobVideoCodecs\|jobFormats\|jobUrls' "$FILE"
           grep -q 'addOption("-f", if (format.isNotEmpty()) format' "$FILE"
@@ -77,8 +58,6 @@ jobs:
           grep -q '@Synchronized' "$FILE"
           grep -q 'PO Token and visitorData ready before cookie retry' "$FILE"
           git diff --check
-          git diff -- "$FILE" app/src/main/assets/download-fix.js
-
       - name: Commit cleanup and remove workflow
         shell: bash
         run: |
