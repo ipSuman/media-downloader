@@ -1,0 +1,47 @@
+name: Fix Build Compile
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Remove obsolete FFmpeg process references
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt"
+          test -f "$FILE"
+          # The manual FFmpeg mux implementation was removed. These stale
+          # process-map calls remained in pause/cancel/cleanup and now prevent
+          # Kotlin compilation. Do not change any other application logic.
+          sed -i '/ffmpegProcesses\[id\]\.destroy()/d' "$FILE"
+          sed -i '/ffmpegProcesses\.remove(jobId)/d' "$FILE"
+          if grep -n 'ffmpegProcesses' "$FILE"; then
+            echo 'Unexpected ffmpegProcesses reference remains.'
+            exit 1
+          fi
+
+      - name: Commit cleanup and remove this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/fix-build-compile.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt .github/workflows/fix-build-compile.yml
+          git diff --cached --quiet && exit 0
+          git commit -m "Remove stale FFmpeg process references"
+          git push
