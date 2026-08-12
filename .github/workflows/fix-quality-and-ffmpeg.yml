@@ -1,0 +1,83 @@
+name: Fix quality selector and FFmpeg resolver
+on:
+  push:
+    branches: [youtube-quality-fallback]
+    paths:
+      - '.github/workflows/fix-quality-and-ffmpeg.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: youtube-quality-fallback
+
+      - name: Patch frontend quality selector
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('index.html')
+          s = p.read_text()
+          old = '''        <select>\n          <option>Best available</option>\n          <option>2160p • 4K</option>\n          <option>1440p</option>\n          <option>1080p</option>\n          <option>720p</option>\n          <option>480p</option>\n          <option>360p</option>\n        </select>'''
+          new = '''        <select id="videoQualitySelect">\n          <option value="">Analyze URL to load exact yt-dlp formats</option>\n        </select>'''
+          if old not in s:
+              raise SystemExit('video quality selector block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  if (!document.getElementById("mdFormatSelect")) {\n    const label = document.createElement("div");\n    label.textContent = "Video format (exact yt-dlp ID)";\n    label.style.cssText = "margin:12px 0 6px;font-weight:800";\n    const select = document.createElement("select");\n    select.id = "mdFormatSelect";\n    select.style.cssText = "width:100%;padding:10px;border-radius:10px;background:var(--panel,#151515);color:var(--text,#fff);border:1px solid var(--border,#333);font-weight:700";\n    formats.parentNode.insertBefore(label, formats);\n    formats.parentNode.insertBefore(select, formats);\n  }\n  const mdSelect = document.getElementById("mdFormatSelect");\n  if (mdSelect) {\n    mdSelect.innerHTML = "";\n    const videoFormats = (data.formats || [])\n      .filter(f => f.vcodec && f.vcodec !== "none" && Number(f.height || 0) > 0)\n      .sort((a,b) => Number(b.height||0)-Number(a.height||0) || Number(b.fps||0)-Number(a.fps||0));\n    videoFormats.forEach(f => {\n      const o = document.createElement("option");\n      o.value = String(f.format_id || "");\n      o.dataset.vcodec = String(f.vcodec || "");\n      o.textContent = `ID ${f.format_id} — ${f.height}p ${f.vcodec}${f.fps ? ` • ${f.fps}fps` : ""}${f.ext ? ` • ${f.ext}` : ""}`;\n      mdSelect.appendChild(o);\n    });\n  }'''
+          new = '''  const qualitySelect = document.getElementById("videoQualitySelect");\n  if (qualitySelect) {\n    qualitySelect.innerHTML = "";\n    const videoFormats = (data.formats || [])\n      .filter(f => f.format_id && f.vcodec && f.vcodec !== "none" && Number(f.height || 0) > 0)\n      .sort((a,b) => Number(b.height||0)-Number(a.height||0) || Number(b.fps||0)-Number(a.fps||0) || String(a.format_id).localeCompare(String(b.format_id), undefined, {numeric:true}));\n    videoFormats.forEach(f => {\n      const o = document.createElement("option");\n      o.value = String(f.format_id);\n      o.dataset.vcodec = String(f.vcodec || "");\n      const codec = String(f.vcodec || "").toLowerCase();\n      const tag = codec.includes("vp9") ? "VP9" : codec.includes("av01") ? "AV1" : codec.includes("avc") ? "AVC/H.264" : String(f.vcodec || "");\n      o.textContent = `ID ${f.format_id} — ${f.height}p • ${tag}${f.fps ? ` • ${f.fps}fps` : ""}${f.ext ? ` • ${f.ext}` : ""}`;\n      qualitySelect.appendChild(o);\n    });\n    if (!videoFormats.length) {\n      const o = document.createElement("option");\n      o.value = "";\n      o.textContent = "No video formats returned";\n      qualitySelect.appendChild(o);\n    }\n  }'''
+          if old not in s:
+              raise SystemExit('old injected selector block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
+      - name: Patch exact download bridge
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/assets/download-fix.js')
+          s = p.read_text()
+          s = s.replace('''    const select = document.getElementById("mdFormatSelect");\n    if (!select || !select.value) return { id: "bv*+ba/b", codec: "" };''', '''    const select = document.getElementById("videoQualitySelect");\n    if (!select || !select.value) return { id: "", codec: "" };''', 1)
+          old = '''      const chosen = selectedVideoFormat();\n      const quality = chosen.id;\n      const container = selects[1]?.value || "Auto";\n      format = videoSelector(quality);\n      videoCodec = chosen.codec;'''
+          new = '''      const chosen = selectedVideoFormat();\n      if (!chosen.id) {\n        alert("Please select a video format ID from the Video quality selector.");\n        return;\n      }\n      const container = selects[1]?.value || "Auto";\n      format = chosen.id;\n      videoCodec = chosen.codec;'''
+          if old not in s:
+              raise SystemExit('download selection block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
+      - name: Patch FFmpeg executable resolver
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt')
+          s = p.read_text()
+          old = '''            val ffmpeg = File(context.noBackupFilesDir, "youtubedl-android/packages/ffmpeg/usr/bin/ffmpeg")\n            if (!ffmpeg.exists()) throw IllegalStateException("Bundled FFmpeg executable not found: ${ffmpeg.absolutePath}")\n            val output = File(dir, "${videoFile.name.substringBeforeLast('.')}.webm")\n            log("FFmpeg concat started")\n            log("FFmpeg command: ${ffmpeg.absolutePath} -y -i ${videoFile.absolutePath} -i ${audioFile.absolutePath} -c:v copy -c:a copy ${output.absolutePath}")\n            val process = ProcessBuilder(ffmpeg.absolutePath, "-y", "-i", videoFile.absolutePath, "-i", audioFile.absolutePath, "-c:v", "copy", "-c:a", "copy", output.absolutePath)\n                .redirectErrorStream(true).start()'''
+          new = '''            val ffmpegRoot = File(context.noBackupFilesDir, "youtubedl-android/packages/ffmpeg")\n            val ffmpeg = resolveBundledFfmpeg(ffmpegRoot)\n            if (ffmpeg == null) {\n                val entries = ffmpegRoot.walkTopDown().take(80).joinToString(",") { it.relativeTo(ffmpegRoot).path }\n                throw IllegalStateException("Bundled FFmpeg executable not found under ${ffmpegRoot.absolutePath}; entries=$entries")\n            }\n            ffmpeg.setExecutable(true, false)\n            val output = File(dir, "${videoFile.name.substringBeforeLast('.')}.webm")\n            val libDir = File(ffmpegRoot, "usr/lib")\n            log("FFmpeg executable resolved: ${ffmpeg.absolutePath}")\n            log("FFmpeg concat started")\n            log("FFmpeg command: ${ffmpeg.absolutePath} -y -i ${videoFile.absolutePath} -i ${audioFile.absolutePath} -map 0:v:0 -map 1:a:0 -c:v copy -c:a copy -shortest ${output.absolutePath}")\n            val processBuilder = ProcessBuilder(ffmpeg.absolutePath, "-y", "-i", videoFile.absolutePath, "-i", audioFile.absolutePath, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy", "-shortest", output.absolutePath)\n                .redirectErrorStream(true)\n            val env = processBuilder.environment()\n            val oldLd = env["LD_LIBRARY_PATH"]\n            env["LD_LIBRARY_PATH"] = if (oldLd.isNullOrBlank()) libDir.absolutePath else libDir.absolutePath + File.pathSeparator + oldLd\n            val process = processBuilder.start()'''
+          if old not in s:
+              raise SystemExit('FFmpeg process block not found')
+          s = s.replace(old, new, 1)
+          marker = '''    private fun runVp9Job(jobId: String) {'''
+          helper = '''    private fun resolveBundledFfmpeg(root: File): File? {\n        if (!root.exists()) return null\n        val preferred = listOf(\n            File(root, "usr/bin/ffmpeg"),\n            File(root, "usr/lib/ffmpeg"),\n            File(root, "ffmpeg")\n        )\n        preferred.firstOrNull { it.isFile }?.let { return it }\n        return root.walkTopDown().firstOrNull { it.isFile && it.name == "ffmpeg" }\n    }\n\n'''
+          if marker not in s:
+              raise SystemExit('runVp9Job marker not found')
+          s = s.replace(marker, helper + marker, 1)
+          p.write_text(s)
+          PY
+
+      - name: Commit fixes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html app/src/main/assets/download-fix.js app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          git commit -m 'Fix exact quality selector and VP9 FFmpeg merge' || exit 0
+          git push origin youtube-quality-fallback
+
+      - name: Remove temporary workflow
+        run: |
+          git rm .github/workflows/fix-quality-and-ffmpeg.yml
+          git commit -m 'Remove temporary quality and FFmpeg workflow'
+          git push origin youtube-quality-fallback
