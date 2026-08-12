@@ -257,6 +257,17 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         }.toString())
     }
 
+    private fun resolveBundledFfmpeg(root: File): File? {
+        if (!root.exists()) return null
+        val preferred = listOf(
+            File(root, "usr/bin/ffmpeg"),
+            File(root, "usr/lib/ffmpeg"),
+            File(root, "ffmpeg")
+        )
+        preferred.firstOrNull { it.isFile }?.let { return it }
+        return root.walkTopDown().firstOrNull { it.isFile && it.name == "ffmpeg" }
+    }
+
     private fun runVp9Job(jobId: String) {
         val dir = jobs[jobId] ?: return
         val url = jobUrls[jobId] ?: return
@@ -318,13 +329,24 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             Thread.sleep(3000)
             if (jobStates[jobId] == "cancelled") return
 
-            val ffmpeg = File(context.noBackupFilesDir, "youtubedl-android/packages/ffmpeg/usr/bin/ffmpeg")
-            if (!ffmpeg.exists()) throw IllegalStateException("Bundled FFmpeg executable not found: ${ffmpeg.absolutePath}")
+            val ffmpegRoot = File(context.noBackupFilesDir, "youtubedl-android/packages/ffmpeg")
+            val ffmpeg = resolveBundledFfmpeg(ffmpegRoot)
+            if (ffmpeg == null) {
+                val entries = ffmpegRoot.walkTopDown().take(80).joinToString(",") { it.relativeTo(ffmpegRoot).path }
+                throw IllegalStateException("Bundled FFmpeg executable not found under ${ffmpegRoot.absolutePath}; entries=$entries")
+            }
+            ffmpeg.setExecutable(true, false)
             val output = File(dir, "${videoFile.name.substringBeforeLast('.')}.webm")
+            val libDir = File(ffmpegRoot, "usr/lib")
+            log("FFmpeg executable resolved: ${ffmpeg.absolutePath}")
             log("FFmpeg concat started")
-            log("FFmpeg command: ${ffmpeg.absolutePath} -y -i ${videoFile.absolutePath} -i ${audioFile.absolutePath} -c:v copy -c:a copy ${output.absolutePath}")
-            val process = ProcessBuilder(ffmpeg.absolutePath, "-y", "-i", videoFile.absolutePath, "-i", audioFile.absolutePath, "-c:v", "copy", "-c:a", "copy", output.absolutePath)
-                .redirectErrorStream(true).start()
+            log("FFmpeg command: ${ffmpeg.absolutePath} -y -i ${videoFile.absolutePath} -i ${audioFile.absolutePath} -map 0:v:0 -map 1:a:0 -c:v copy -c:a copy -shortest ${output.absolutePath}")
+            val processBuilder = ProcessBuilder(ffmpeg.absolutePath, "-y", "-i", videoFile.absolutePath, "-i", audioFile.absolutePath, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy", "-shortest", output.absolutePath)
+                .redirectErrorStream(true)
+            val env = processBuilder.environment()
+            val oldLd = env["LD_LIBRARY_PATH"]
+            env["LD_LIBRARY_PATH"] = if (oldLd.isNullOrBlank()) libDir.absolutePath else libDir.absolutePath + File.pathSeparator + oldLd
+            val process = processBuilder.start()
             ffmpegProcesses[jobId] = process
             process.inputStream.bufferedReader().useLines { lines -> lines.forEach { log("FFmpeg: $it") } }
             val exitCode = process.waitFor()

@@ -24,8 +24,8 @@
   function videoSelector(label) { return String(label || "").trim() || "bv*+ba/b"; }
 
   function selectedVideoFormat() {
-    const select = document.getElementById("mdFormatSelect");
-    if (!select || !select.value) return { id: "bv*+ba/b", codec: "" };
+    const select = document.getElementById("videoQualitySelect");
+    if (!select || !select.value) return { id: "", codec: "" };
     const option = select.options[select.selectedIndex];
     return { id: String(select.value), codec: String(option?.dataset?.vcodec || "") };
   }
@@ -158,9 +158,12 @@
     if (mode === "video") {
       const selects = byId("videoOptions")?.querySelectorAll("select") || [];
       const chosen = selectedVideoFormat();
-      const quality = chosen.id;
+      if (!chosen.id) {
+        alert("Please select a video format ID from the Video quality selector.");
+        return;
+      }
       const container = selects[1]?.value || "Auto";
-      format = videoSelector(quality);
+      format = chosen.id;
       videoCodec = chosen.codec;
       if (container !== "Auto") mergeOutputFormat = container.toLowerCase();
     } else if (mode === "audio") {
