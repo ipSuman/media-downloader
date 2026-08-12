@@ -1,0 +1,140 @@
+name: Fix exact format selector
+on:
+  push:
+    branches: [youtube-quality-fallback]
+    paths:
+      - '.github/workflows/fix-exact-format-selector.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: youtube-quality-fallback
+      - name: Patch format selector and injection
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt')
+          s = p.read_text()
+          old = 'listOf("api-compat.js", "theme.js", "selection-bridge.js", "cut-keyboard-fix.js")'
+          new = 'listOf("api-compat.js", "theme.js", "selection-bridge.js", "cut-keyboard-fix.js", "download-fix.js")'
+          if old not in s: raise SystemExit('MainActivity injection list pattern not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('app/src/main/assets/download-fix.js')
+          s = p.read_text()
+          old = '''  function selectedVideoFormat() {
+    const select = document.getElementById("mdFormatSelect");
+    if (!select || !select.value) return { id: "bv*+ba/b", codec: "" };
+    const option = select.options[select.selectedIndex];
+    return { id: String(select.value), codec: String(option?.dataset?.vcodec || "") };
+  }'''
+          new = '''  function selectedVideoFormat() {
+    const select = document.getElementById("mdFormatSelect");
+    if (!select || !select.value) return { id: "", codec: "" };
+    const option = select.options[select.selectedIndex];
+    return { id: String(select.value), codec: String(option?.dataset?.vcodec || "") };
+  }'''
+          if old not in s: raise SystemExit('selectedVideoFormat pattern not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  if (!document.getElementById("mdFormatSelect")) {
+    const label = document.createElement("div");
+    label.textContent = "Video format (exact yt-dlp ID)";
+    label.style.cssText = "margin:12px 0 6px;font-weight:800";
+    const select = document.createElement("select");
+    select.id = "mdFormatSelect";
+    select.style.cssText = "width:100%;padding:10px;border-radius:10px;background:var(--panel,#151515);color:var(--text,#fff);border:1px solid var(--border,#333);font-weight:700";
+    formats.parentNode.insertBefore(label, formats);
+    formats.parentNode.insertBefore(select, formats);
+  }'''
+          new = '''  let mdSelect = document.getElementById("mdFormatSelect");
+  if (!mdSelect) {
+    const videoOptions = document.getElementById("videoOptions");
+    const firstRow = videoOptions?.querySelector(".option-row");
+    const oldSelect = firstRow?.querySelector("select");
+    if (firstRow && oldSelect) {
+      const label = firstRow.querySelector("label");
+      if (label) label.textContent = "Video quality / exact yt-dlp format";
+      oldSelect.style.display = "none";
+      mdSelect = document.createElement("select");
+      mdSelect.id = "mdFormatSelect";
+      mdSelect.style.cssText = "width:100%;padding:12px;border-radius:12px;background:var(--card2,#1b2226);color:var(--text,#fff);border:1px solid var(--accent,#35c7b5);font-weight:800";
+      firstRow.appendChild(mdSelect);
+    }
+  }'''
+          if old not in s: raise SystemExit('selector creation block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''  const mdSelect = document.getElementById("mdFormatSelect");
+  if (mdSelect) {
+    mdSelect.innerHTML = "";
+    const videoFormats = (data.formats || [])
+      .filter(f => f.vcodec && f.vcodec !== "none" && Number(f.height || 0) > 0)
+      .sort((a,b) => Number(b.height||0)-Number(a.height||0) || Number(b.fps||0)-Number(a.fps||0));
+    videoFormats.forEach(f => {
+      const o = document.createElement("option");
+      o.value = String(f.format_id || "");
+      o.dataset.vcodec = String(f.vcodec || "");
+      o.textContent = `ID ${f.format_id} — ${f.height}p ${f.vcodec}${f.fps ? ` • ${f.fps}fps` : ""}${f.ext ? ` • ${f.ext}` : ""}`;
+      mdSelect.appendChild(o);
+    });
+  }'''
+          new = '''  mdSelect = document.getElementById("mdFormatSelect");
+  if (mdSelect) {
+    mdSelect.innerHTML = "";
+    const videoFormats = (data.formats || [])
+      .filter(f => f.vcodec && f.vcodec !== "none" && Number(f.height || 0) > 0 && f.format_id)
+      .sort((a,b) => Number(b.height||0)-Number(a.height||0) || Number(b.fps||0)-Number(a.fps||0) || String(a.format_id).localeCompare(String(b.format_id), undefined, {numeric:true}));
+    videoFormats.forEach(f => {
+      const o = document.createElement("option");
+      o.value = String(f.format_id);
+      o.dataset.vcodec = String(f.vcodec || "");
+      const codec = String(f.vcodec || "").toLowerCase();
+      const tag = codec.includes("vp9") ? " • VP9" : codec.includes("av01") ? " • AV1" : codec.includes("avc") ? " • AVC/H.264" : ` • ${f.vcodec}`;
+      o.textContent = `ID ${f.format_id} — ${f.height}p${tag}${f.fps ? ` • ${f.fps}fps` : ""}${f.ext ? ` • ${f.ext}` : ""}`;
+      mdSelect.appendChild(o);
+    });
+    if (!videoFormats.length) {
+      const o = document.createElement("option");
+      o.value = "";
+      o.textContent = "No video formats returned";
+      mdSelect.appendChild(o);
+    }
+  }'''
+          if old not in s: raise SystemExit('format population block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''      const chosen = selectedVideoFormat();
+      const quality = chosen.id;
+      const container = selects[1]?.value || "Auto";
+      format = videoSelector(quality);
+      videoCodec = chosen.codec;'''
+          new = '''      const chosen = selectedVideoFormat();
+      if (!chosen.id) {
+        alert("Please select an exact yt-dlp video format ID.");
+        return;
+      }
+      const container = selects[1]?.value || "Auto";
+      format = chosen.id;
+      videoCodec = chosen.codec;'''
+          if old not in s: raise SystemExit('download selection block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt app/src/main/assets/download-fix.js
+          git commit -m 'Fix exact VP9 format selector' || exit 0
+          git push origin youtube-quality-fallback
+      - name: Remove temporary workflow
+        run: |
+          git rm .github/workflows/fix-exact-format-selector.yml
+          git commit -m 'Remove temporary format selector workflow'
+          git push origin youtube-quality-fallback
