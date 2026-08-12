@@ -259,18 +259,22 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     }
 
     private fun resolveBundledFfmpeg(root: File): File? {
-        val nativeDir = File(context.applicationInfo.nativeLibraryDir)
+        // libffmpeg.zip.so in nativeLibraryDir is the ZIP container, not the
+        // executable. FFmpeg.init() extracts its payload under this root.
+        // Always prefer the extracted executable so its bundled libav*.so
+        // dependencies can be resolved from the extracted library directory.
         val preferred = listOf(
-            File(nativeDir, "libffmpeg.so"),
             File(root, "usr/bin/ffmpeg"),
             File(root, "usr/lib/ffmpeg"),
             File(root, "ffmpeg")
         )
         preferred.firstOrNull { it.isFile && it.canRead() }?.let { return it }
         if (root.exists()) {
-            root.walkTopDown().firstOrNull { it.isFile && it.name == "ffmpeg" }?.let { return it }
+            root.walkTopDown().firstOrNull {
+                it.isFile && it.name == "ffmpeg" && it.canRead()
+            }?.let { return it }
         }
-        return nativeDir.listFiles()?.firstOrNull { it.isFile && it.name.equals("libffmpeg.so", true) }
+        return null
     }
 
     private fun runVp9Job(jobId: String) {
@@ -342,10 +346,18 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 throw IllegalStateException("Bundled FFmpeg executable not found; root=${ffmpegRoot.absolutePath}; entries=$entries; nativeLibs=$nativeEntries")
             }
             ffmpeg.setExecutable(true, false)
-            val output = File(dir, "${videoFile.name.substringBeforeLast('.')}.webm")
-            val libDir = ffmpeg.parentFile ?: File(context.applicationInfo.nativeLibraryDir)
+            // Keep the merged output separate from the downloaded video input.
+            val output = File(dir, "merged.webm")
+            val extractedLibDir = File(ffmpegRoot, "usr/lib")
+            val libDir = if (extractedLibDir.isDirectory) extractedLibDir else (ffmpeg.parentFile ?: ffmpegRoot)
             log("FFmpeg executable resolved: ${ffmpeg.absolutePath}")
             log("FFmpeg executable exists=${ffmpeg.exists()} executable=${ffmpeg.canExecute()} size=${ffmpeg.length()}")
+            log("FFmpeg library directory: ${libDir.absolutePath}")
+            log("FFmpeg library directory exists=${libDir.isDirectory}")
+            if (libDir.isDirectory) {
+                val libs = libDir.listFiles()?.filter { it.isFile && it.name.endsWith(".so") }?.take(30)?.joinToString(",") { it.name } ?: "<none>"
+                log("FFmpeg bundled libraries: $libs")
+            }
             log("FFmpeg concat started")
             log("FFmpeg command: ${ffmpeg.absolutePath} -y -i ${videoFile.absolutePath} -i ${audioFile.absolutePath} -map 0:v:0 -map 1:a:0 -c:v copy -c:a copy -shortest ${output.absolutePath}")
             val processBuilder = ProcessBuilder(ffmpeg.absolutePath, "-y", "-i", videoFile.absolutePath, "-i", audioFile.absolutePath, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy", "-shortest", output.absolutePath)
