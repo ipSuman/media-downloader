@@ -111,6 +111,14 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     private fun addYoutubePoToken(request: YoutubeDLRequest) {
         try {
             val token = poTokenProvider.getMwebGvsToken()
+            val visitorData = poTokenProvider.visitorData()
+            if (!visitorData.isNullOrBlank()) {
+                request.addOption(
+                    "--extractor-args",
+                    "youtube:visitor_data=$visitorData"
+                )
+                log("Attached Innertube visitorData to YouTube request")
+            }
             if (!token.isNullOrBlank()) {
                 request.addOption(
                     "--extractor-args",
