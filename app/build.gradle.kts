@@ -8,6 +8,7 @@ plugins {
 android {
     namespace = "com.ipsuman.mediadownloader"
     compileSdk = 35
+    ndkVersion = "26.1.10909125"
 
     buildFeatures {
         buildConfig = true
@@ -62,9 +63,8 @@ val copyWebApp by tasks.registering(Copy::class) {
 }
 
 // The bundled FFmpeg package contains librubberband.so, which is linked
-// against Android's libc++ shared runtime. youtubedl-android's FFmpeg AAR
-// does not package libc++_shared.so in this configuration, so copy the
-// matching runtime from the NDK into our APK's native libraries.
+// against Android's libc++ shared runtime. Copy the matching runtime from
+// the configured Android NDK into the APK's native libraries.
 val copyLibcxxShared by tasks.registering(Copy::class) {
     val ndkRoot = android.ndkDirectory
     from(File(ndkRoot, "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"))
@@ -88,10 +88,3 @@ dependencies {
     implementation("androidx.documentfile:documentfile:1.1.0")
 
     // Embedded local HTTP server
-    implementation("org.nanohttpd:nanohttpd:2.3.1")
-
-    // Android yt-dlp engine + bundled FFmpeg.
-    // This library provides its own Python runtime; do not combine it with Chaquopy.
-    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
-    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
-}
