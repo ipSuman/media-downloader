@@ -146,14 +146,24 @@
     if (!url) { alert("Analyze a URL first."); return; }
     const mode = currentMode();
     let format = "bv*+ba/b", audioOnly = false, audioFormat = "", audioQuality = "", mergeOutputFormat = "", videoCodec = "";
+    let selectedVideoId = "";
 
     if (mode === "video") {
       const selects = byId("videoOptions")?.querySelectorAll("select") || [];
       const chosen = selectedVideoFormat();
       if (!chosen.id) { alert("Please select a video format ID from the Video quality selector."); return; }
       const container = selects[1]?.value || "Auto";
+      selectedVideoId = chosen.id;
       format = chosen.id; videoCodec = chosen.codec;
       if (container !== "Auto") mergeOutputFormat = container.toLowerCase();
+
+      // VP9 always uses YouTube audio format 251. With merge enabled the
+      // exact format selector sent to yt-dlp is <selected VP9 ID>+251.
+      // With merge disabled the two tracks are submitted as independent jobs.
+      if (videoCodec.toLowerCase().includes("vp9") && mergeEnabled()) {
+        format = `${selectedVideoId}+251`;
+        console.log("Media Downloader: VP9 merge enabled; yt-dlp format selector:", format);
+      }
     } else if (mode === "audio") {
       const selects = byId("audioOptions")?.querySelectorAll("select") || [];
       audioFormat = selects[0]?.value || "Best available"; audioQuality = selects[1]?.value || "Best"; audioOnly = true; format = audioSelector(audioFormat);
@@ -170,9 +180,9 @@
 
     try {
       if (mode === "video" && videoCodec.toLowerCase().includes("vp9") && !mergeEnabled()) {
-        const videoItem = makeQueueItem(url, `🎬 Video • ID ${format}`);
+        const videoItem = makeQueueItem(url, `🎬 Video • ID ${selectedVideoId}`);
         const audioItem = makeQueueItem(url, "🎵 Audio • ID 251");
-        const videoPayload = { ...common, format, audio_only: false, audio_format: "", audio_quality: "", merge_output_format: mergeOutputFormat, video_codec: "separate-video" };
+        const videoPayload = { ...common, format: selectedVideoId, audio_only: false, audio_format: "", audio_quality: "", merge_output_format: mergeOutputFormat, video_codec: "separate-video" };
         const audioPayload = { ...common, format: "251", audio_only: false, audio_format: "", audio_quality: "", merge_output_format: "", video_codec: "separate-audio" };
         console.log("Media Downloader: VP9 separate-track mode", { videoPayload, audioPayload });
         await Promise.all([submitJob(videoPayload, videoItem), submitJob(audioPayload, audioItem)]);
