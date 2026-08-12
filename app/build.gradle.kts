@@ -88,3 +88,10 @@ dependencies {
     implementation("androidx.documentfile:documentfile:1.1.0")
 
     // Embedded local HTTP server
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+
+    // Android yt-dlp engine + bundled FFmpeg.
+    // This library provides its own Python runtime; do not combine it with Chaquopy.
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
+}
