@@ -1,0 +1,32 @@
+name: Apply VP9 Fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - youtube-quality-fallback
+    paths:
+      - 'scripts/apply-vp9-fix.py'
+      - '.github/workflows/apply-vp9-fix2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: youtube-quality-fallback
+          fetch-depth: 0
+      - name: Apply patch
+        run: python3 scripts/apply-vp9-fix.py
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html app/src/main/assets/download-fix.js app/src/main/assets/api-compat.js app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Implement exact format and VP9 audio merge pipeline'
+          git push origin youtube-quality-fallback
