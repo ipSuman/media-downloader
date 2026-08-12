@@ -43,9 +43,33 @@ jobs:
           EXPAT_VERSION="2.8.2"
           EXPAT_TAG="R_2_8_2"
           mkdir -p .ci/expat
-          curl --fail --location --retry 4 --retry-delay 2 \
-            "https://github.com/libexpat/libexpat/releases/download/${EXPAT_TAG}/expat-${EXPAT_VERSION}.tar.gz" \
-            -o .ci/expat/expat.tar.gz
+
+          # Do not depend on the GitHub release-asset CDN. Build #179 failed
+          # because that endpoint returned HTTP 503 / curl exit 56. The tag
+          # archive contains the same official Expat source and is served by
+          # GitHub's source archive service instead.
+          EXPAT_URLS=(
+            "https://codeload.github.com/libexpat/libexpat/tar.gz/refs/tags/${EXPAT_TAG}"
+            "https://downloads.sourceforge.net/project/expat/expat/${EXPAT_VERSION}/expat-${EXPAT_VERSION}.tar.gz"
+          )
+
+          downloaded="false"
+          for url in "${EXPAT_URLS[@]}"; do
+            echo "Downloading Expat from: ${url}"
+            if curl --fail --show-error --location \
+              --retry 8 --retry-all-errors --retry-delay 3 --retry-max-time 180 \
+              --connect-timeout 20 --max-time 300 \
+              "$url" -o .ci/expat/expat.tar.gz; then
+              downloaded="true"
+              break
+            fi
+            echo "Download failed; trying the next official source."
+            rm -f .ci/expat/expat.tar.gz
+          done
+
+          test "$downloaded" = "true"
+          test -s .ci/expat/expat.tar.gz
+
           tar -xzf .ci/expat/expat.tar.gz -C .ci/expat
           cmake -S ".ci/expat/expat-${EXPAT_VERSION}" \
             -B .ci/expat/build \
@@ -63,9 +87,9 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$PWD/.ci/expat/install"
           cmake --build .ci/expat/build --target expat -j2
           cmake --install .ci/expat/build
-          # app/build/generated is not an Android source-set directory, so the
-          # previous copy was never packaged into the APK. Put the ABI library
-          # in the standard jniLibs source tree so it lands in nativeLibraryDir.
+
+          # Package the Android library in the standard jniLibs source tree.
+          # The runtime later copies/uses it as FFmpeg's libexpat.so.1.
           mkdir -p app/src/main/jniLibs/arm64-v8a
           EXPAT_LIB="$(find .ci/expat/install -name 'libexpat.so*' -type f | head -n 1)"
           test -n "$EXPAT_LIB"
