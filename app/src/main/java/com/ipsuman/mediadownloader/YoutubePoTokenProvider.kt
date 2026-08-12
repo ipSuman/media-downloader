@@ -8,6 +8,8 @@ import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.net.URLDecoder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -70,7 +72,42 @@ class YoutubePoTokenProvider(private val context: Context) {
         }
     }
 
+    /**
+     * FFmpeg's extracted package contains libfontconfig.so, which depends on
+     * libexpat.so.1. Android's linker namespace does not reliably resolve a
+     * dependency from the APK's nativeLibraryDir when the parent library is
+     * loaded from the extracted FFmpeg directory. Put the Android-built Expat
+     * beside the other extracted FFmpeg libraries so the dependency is found
+     * in the first LD_LIBRARY_PATH directory.
+     */
+    private fun ensureFfmpegExpatRuntime() {
+        try {
+            val source = File(context.applicationInfo.nativeLibraryDir, "libexpat.so.1")
+            val targetDir = File(context.noBackupFilesDir, "youtubedl-android/packages/ffmpeg/usr/lib")
+            val target = File(targetDir, "libexpat.so.1")
+            if (!source.isFile || source.length() == 0L) {
+                lastError = "Bundled Android Expat library missing: ${source.absolutePath}"
+                return
+            }
+            if (!targetDir.isDirectory) targetDir.mkdirs()
+            if (!target.isFile || target.length() != source.length()) {
+                FileInputStream(source).use { input ->
+                    FileOutputStream(target).use { output -> input.copyTo(output) }
+                }
+            }
+            target.setReadable(true, false)
+            target.setExecutable(false, false)
+        } catch (e: Exception) {
+            lastError = "Could not prepare FFmpeg Expat runtime: ${e.message}"
+        }
+    }
+
     fun getMwebGvsToken(timeoutSeconds: Long = 20): String? {
+        // This is deliberately done on every request. It is cheap after the
+        // first copy and guarantees the FFmpeg runtime is repaired before any
+        // VP9 merge is attempted, even when PO-token generation is unavailable.
+        ensureFfmpegExpatRuntime()
+
         val latch = CountDownLatch(1)
         var result: String? = null
         mainHandler.post {
