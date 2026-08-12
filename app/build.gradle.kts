@@ -8,6 +8,7 @@ plugins {
 android {
     namespace = "com.ipsuman.mediadownloader"
     compileSdk = 35
+    ndkVersion = "26.1.10909125"
 
     buildFeatures {
         buildConfig = true
@@ -23,6 +24,11 @@ android {
         ndk {
           abiFilters += listOf("arm64-v8a")
         }
+    }
+
+    packagingOptions {
+        jniLibs.useLegacyPackaging = true
+        jniLibs.pickFirsts.add("lib/arm64-v8a/libc++_shared.so")
     }
 
     buildTypes {
@@ -46,6 +52,7 @@ android {
     sourceSets {
         getByName("main") {
             assets.srcDir(layout.buildDirectory.dir("generated/assets"))
+            jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
         }
     }
 }
@@ -55,10 +62,22 @@ val copyWebApp by tasks.registering(Copy::class) {
     into(layout.buildDirectory.dir("generated/assets"))
 }
 
+// The bundled FFmpeg package contains librubberband.so, which is linked
+// against Android's libc++ shared runtime. Copy the matching runtime from
+// the configured Android NDK into the APK's native libraries.
+val copyLibcxxShared by tasks.registering(Copy::class) {
+    val ndkRoot = android.ndkDirectory
+    from(File(ndkRoot, "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"))
+    into(layout.buildDirectory.dir("generated/jniLibs/arm64-v8a"))
+}
+
 android.applicationVariants.all {
     val variantName = name.replaceFirstChar { it.uppercase() }
     tasks.named("merge${variantName}Assets").configure {
         dependsOn(copyWebApp)
+    }
+    tasks.named("merge${variantName}JniLibFolders").configure {
+        dependsOn(copyLibcxxShared)
     }
 }
 

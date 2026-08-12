@@ -3,11 +3,14 @@ name: Android Build
 on:
   push:
     branches:
-      - main
+      - youtube-quality-fallback
   workflow_dispatch:
 
 permissions:
   contents: write
+
+env:
+  GIT_SSL_CAINFO: /etc/ssl/certs/ca-certificates.crt
 
 jobs:
   build:
@@ -15,27 +18,59 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout committed source
         uses: actions/checkout@v4
+        env:
+          GIT_SSL_CAINFO: /etc/ssl/certs/ca-certificates.crt
         with:
           fetch-depth: 0
-
-      - name: Restore known-good engine source
-        run: |
-          git show 3e02a6a89fe0f48b768d66f0e3f0b7b03536c221:app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt > app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
-          if ! git diff --quiet -- app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
-            git commit -m "Restore known-good engine server source [skip ci]"
-            git push origin HEAD:main
-          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Setup Android SDK and NDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0 ndk;26.1.10909125"
+
+      - name: Build and package Android Expat runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPAT_VERSION="2.8.2"
+          EXPAT_TAG="R_2_8_2"
+          mkdir -p .ci/expat
+          curl --fail --location --retry 4 --retry-delay 2 \
+            "https://github.com/libexpat/libexpat/releases/download/${EXPAT_TAG}/expat-${EXPAT_VERSION}.tar.gz" \
+            -o .ci/expat/expat.tar.gz
+          tar -xzf .ci/expat/expat.tar.gz -C .ci/expat
+          cmake -S ".ci/expat/expat-${EXPAT_VERSION}" \
+            -B .ci/expat/build \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DEXPAT_SHARED_LIBS=ON \
+            -DEXPAT_BUILD_TOOLS=OFF \
+            -DEXPAT_BUILD_EXAMPLES=OFF \
+            -DEXPAT_BUILD_TESTS=OFF \
+            -DEXPAT_BUILD_DOCS=OFF \
+            -DEXPAT_BUILD_FUZZERS=OFF \
+            -DEXPAT_BUILD_PKGCONFIG=OFF \
+            -DEXPAT_ENABLE_INSTALL=ON \
+            -DCMAKE_INSTALL_PREFIX="$PWD/.ci/expat/install"
+          cmake --build .ci/expat/build --target expat -j2
+          cmake --install .ci/expat/build
+          # app/build/generated is not an Android source-set directory, so the
+          # previous copy was never packaged into the APK. Put the ABI library
+          # in the standard jniLibs source tree so it lands in nativeLibraryDir.
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          EXPAT_LIB="$(find .ci/expat/install -name 'libexpat.so*' -type f | head -n 1)"
+          test -n "$EXPAT_LIB"
+          cp -L "$EXPAT_LIB" app/src/main/jniLibs/arm64-v8a/libexpat.so.1
+          ls -l app/src/main/jniLibs/arm64-v8a/libexpat.so.1
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -48,5 +83,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MediaDownloader-debug
+          name: MediaDownloader-youtube-quality-fallback-fixed
           path: app/build/outputs/apk/debug/app-debug.apk

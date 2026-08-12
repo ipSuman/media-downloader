@@ -11,6 +11,7 @@
 
   const originalFetch = window.fetch.bind(window);
   const ENGINE = "http://127.0.0.1:8765";
+  window.__mdEngineDetected = false;
 
   function rewrite(url){
     try {
@@ -57,6 +58,7 @@
       const data = await response.json();
       if (!data || !data.ytdlp) return;
 
+      window.__mdEngineDetected = true;
       window.engineBase = ENGINE;
       window.__mdNativeEngineBase = ENGINE;
 
@@ -83,6 +85,7 @@
   }, 100);
 
   const retryTimer = setInterval(function(){
+    if (window.__mdEngineDetected) { clearInterval(retryTimer); return; }
     lateEngineProbe();
   }, 3000);
 
