@@ -259,10 +259,15 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     }
 
     private fun resolveBundledFfmpeg(root: File): File? {
-        // libffmpeg.zip.so in nativeLibraryDir is the ZIP container, not the
-        // executable. FFmpeg.init() extracts its payload under this root.
-        // Always prefer the extracted executable so its bundled libav*.so
-        // dependencies can be resolved from the extracted library directory.
+        // youtubedl-android 0.18.1 deliberately ships the runnable FFmpeg
+        // binary as libffmpeg.so in the APK's nativeLibraryDir. The
+        // libffmpeg.zip.so file is only the archive used by FFmpeg.init().
+        // FFmpeg's own YoutubeDL implementation also points yt-dlp at this
+        // native binary, so use the same path for our direct ProcessBuilder.
+        val nativeFfmpeg = File(context.applicationInfo.nativeLibraryDir, "libffmpeg.so")
+        if (nativeFfmpeg.isFile && nativeFfmpeg.canRead()) return nativeFfmpeg
+
+        // Fallbacks retained for diagnostic compatibility with older package layouts.
         val preferred = listOf(
             File(root, "usr/bin/ffmpeg"),
             File(root, "usr/lib/ffmpeg"),
@@ -331,7 +336,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 executePart(partRequest("251", audioPattern, true), "audio-retry", 50.0, 40.0)
             }
             val audioFile = dir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("audio.") && !it.name.endsWith(".part") }
-                ?: throw IllegalStateException("Audio 251 download completed but no audio file was found")
+                ?: throw IllegalStateException("Audio download completed but no audio file was found")
             log("Audio 251 download completed: ${audioFile.name}")
 
             log("Waiting 3 seconds before FFmpeg concat")
@@ -346,7 +351,6 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 throw IllegalStateException("Bundled FFmpeg executable not found; root=${ffmpegRoot.absolutePath}; entries=$entries; nativeLibs=$nativeEntries")
             }
             ffmpeg.setExecutable(true, false)
-            // Keep the merged output separate from the downloaded video input.
             val output = File(dir, "merged.webm")
             val extractedLibDir = File(ffmpegRoot, "usr/lib")
             val libDir = if (extractedLibDir.isDirectory) extractedLibDir else (ffmpeg.parentFile ?: ffmpegRoot)
@@ -482,7 +486,9 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val url = req.optString("url", "").trim()
             if (url.isEmpty()) return json(Response.Status.BAD_REQUEST, """{"ok":false,"error":"URL is required"}""")
             val jobId = UUID.randomUUID().toString().replace("-", "").take(12)
-            val dir = File(context.cacheDir, "media-downloads/$jobId")
+            // Jobs contain active media and must not live in Android's cache directory,
+            // which the OS may delete while a long download is still running.
+            val dir = File(context.filesDir, "media-downloads/$jobId")
             if (!dir.mkdirs() && !dir.isDirectory) throw IllegalStateException("Could not create download directory")
             val format = req.optString("format", "").trim()
             val start = req.optString("start", "").trim()
@@ -618,7 +624,13 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     }
 
     private fun writeStatus(dir: File, json: String) {
-        try { File(dir, "android_status.json").writeText(json) } catch (e: Exception) { log("Could not write job status", e) }
+        try {
+            if (!dir.exists() && !dir.mkdirs()) {
+                log("Could not create job directory for status: ${dir.absolutePath}")
+                return
+            }
+            File(dir, "android_status.json").writeText(json)
+        } catch (e: Exception) { log("Could not write job status", e) }
     }
 
     private fun isYoutubeUrl(url: String): Boolean {
