@@ -108,6 +108,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         addYoutubePoToken(request)
     }
 
+    @Synchronized
     private fun addYoutubePoToken(request: YoutubeDLRequest) {
         try {
             val token = poTokenProvider.getMwebGvsToken()
@@ -453,7 +454,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         try {
             ensureEngine()
             val codec = jobVideoCodecs[jobId]?.lowercase(Locale.US) ?: ""
-            if (isYoutubeUrl(jobUrls[jobId] ?: "") && codec.contains("vp9")) {
+            if (isYoutubeUrl(jobUrls[jobId] ?: "") && codec.contains("vp9") && !jobFormats[jobId].orEmpty().contains("+")) {
                 runVp9Job(jobId)
                 return
             }
@@ -473,7 +474,9 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 jobStates[jobId] = "retrying"
                 writeProgress(dir, "retrying", readPercent(dir).toDouble(), null,
                     "Retrying with imported YouTube cookies…")
-                YoutubeDL.getInstance().execute(cookieRequest!!, jobId) { progress, eta, line ->
+                addAuthenticationOptions(cookieRequest!!)
+                log("PO Token and visitorData ready before cookie retry")
+                YoutubeDL.getInstance().execute(cookieRequest, jobId) { progress, eta, line ->
                     val state = jobStates[jobId] ?: "running"
                     writeProgress(dir, state, progress.toDouble(), eta, line)
                 }
