@@ -1457,28 +1457,22 @@ async function monitorDownload(
       );
 
 
-    if(data.percent != null){
+    const terminal =
+      data.status === "completed" ||
+      data.status === "failed" ||
+      data.status === "cancelled";
 
-      bar.style.width =
-        `${Math.max(
-          0,
-          Math.min(
-            100,
-            Number(data.percent)
-          )
-        )}%`;
+    const rawPercent = Number(data.percent);
+    const percent = Number.isFinite(rawPercent)
+      ? Math.max(0, Math.min(terminal && data.status === "completed" ? 100 : 99, rawPercent))
+      : 0;
 
-    }
-
+    bar.style.width = `${percent}%`;
 
     status.textContent =
-      `${data.status || "working"}`
-      + (data.speed
-        ? ` • ${data.speed}`
-        : "")
-      + (data.eta
-        ? ` • ETA ${data.eta}`
-        : "");
+      `${terminal && data.status === "completed" ? "completed" : (data.status || "working")} • ${percent}%`
+      + (data.speed ? ` • ${data.speed}` : "")
+      + (data.eta ? ` • ETA ${data.eta}` : "");
 
 
     if(
