@@ -5,77 +5,83 @@ ENGINE = ROOT / "app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer
 INDEX = ROOT / "index.html"
 
 s = ENGINE.read_text(encoding="utf-8")
+
+# The youtubedl-android FFmpeg package is a ZIP stored as libffmpeg.zip.so.
+# Its extracted payload contains usr/lib/*.so, while the executable itself
+# is the native libffmpeg.so shipped in nativeLibraryDir. Android's dynamic
+# linker must be given the extracted usr/lib directory through LD_LIBRARY_PATH.
 old = '''    private fun resolveBundledFfmpeg(root: File): File? {
-        if (!root.exists()) return null
+        // libffmpeg.zip.so in nativeLibraryDir is the ZIP container, not the
+        // executable. FFmpeg.init() extracts its payload under this root.
+        // Always prefer the extracted executable so its bundled libav*.so
+        // dependencies can be resolved from the extracted library directory.
         val preferred = listOf(
-            File(root, "usr/bin/ffmpeg"),
-            File(root, "usr/lib/ffmpeg"),
-            File(root, "ffmpeg")
-        )
-        preferred.firstOrNull { it.isFile }?.let { return it }
-        return root.walkTopDown().firstOrNull { it.isFile && it.name == "ffmpeg" }
-    }
-'''
-new = '''    private fun resolveBundledFfmpeg(root: File): File? {
-        val nativeDir = File(context.applicationInfo.nativeLibraryDir)
-        val preferred = listOf(
-            File(nativeDir, "libffmpeg.so"),
             File(root, "usr/bin/ffmpeg"),
             File(root, "usr/lib/ffmpeg"),
             File(root, "ffmpeg")
         )
         preferred.firstOrNull { it.isFile && it.canRead() }?.let { return it }
         if (root.exists()) {
-            root.walkTopDown().firstOrNull { it.isFile && it.name == "ffmpeg" }?.let { return it }
+            root.walkTopDown().firstOrNull {
+                it.isFile && it.name == "ffmpeg" && it.canRead()
+            }?.let { return it }
         }
-        return nativeDir.listFiles()?.firstOrNull { it.isFile && it.name.equals("libffmpeg.so", true) }
+        return null
     }
 '''
-if old in s:
-    s = s.replace(old, new, 1)
-
-old = '''            val ffmpeg = resolveBundledFfmpeg(ffmpegRoot)
-            if (ffmpeg == null) {
-                val entries = ffmpegRoot.walkTopDown().take(80).joinToString(",") { it.relativeTo(ffmpegRoot).path }
-                throw IllegalStateException("Bundled FFmpeg executable not found under ${ffmpegRoot.absolutePath}; entries=$entries")
-            }
-            ffmpeg.setExecutable(true, false)
-            val output = File(dir, "${videoFile.name.substringBeforeLast('.')}.webm")
-            val libDir = File(ffmpegRoot, "usr/lib")
-'''
-new = '''            val ffmpeg = resolveBundledFfmpeg(ffmpegRoot)
-            if (ffmpeg == null) {
-                val entries = if (ffmpegRoot.exists()) ffmpegRoot.walkTopDown().take(80).joinToString(",") { it.relativeTo(ffmpegRoot).path } else "<ffmpeg package root missing>"
-                val nativeEntries = File(context.applicationInfo.nativeLibraryDir).listFiles()?.joinToString(",") { it.name } ?: "<none>"
-                throw IllegalStateException("Bundled FFmpeg executable not found; root=${ffmpegRoot.absolutePath}; entries=$entries; nativeLibs=$nativeEntries")
-            }
-            ffmpeg.setExecutable(true, false)
-            val output = File(dir, "${videoFile.name.substringBeforeLast('.')}.webm")
-            val libDir = ffmpeg.parentFile ?: File(context.applicationInfo.nativeLibraryDir)
+new = '''    private fun resolveBundledFfmpeg(root: File): File? {
+        // youtubedl-android stores the FFmpeg package as libffmpeg.zip.so and
+        // extracts only its usr/lib payload. The executable is libffmpeg.so
+        // in Android's nativeLibraryDir. It is an executable despite the .so
+        // suffix; its shared FFmpeg libraries live in the extracted usr/lib.
+        val nativeDir = File(context.applicationInfo.nativeLibraryDir)
+        val executable = File(nativeDir, "libffmpeg.so")
+        if (executable.isFile && executable.canRead()) return executable
+        return null
+    }
 '''
 if old not in s:
-    raise SystemExit("FFmpeg process block not found")
+    raise SystemExit("FFmpeg resolver block not found")
 s = s.replace(old, new, 1)
 
-old = '''            log("FFmpeg executable resolved: ${ffmpeg.absolutePath}")
-            log("FFmpeg concat started")
+old = '''            val env = processBuilder.environment()
+            val oldLd = env["LD_LIBRARY_PATH"]
+            env["LD_LIBRARY_PATH"] = if (oldLd.isNullOrBlank()) libDir.absolutePath else libDir.absolutePath + File.pathSeparator + oldLd
+            val process = processBuilder.start()
 '''
-new = '''            log("FFmpeg executable resolved: ${ffmpeg.absolutePath}")
-            log("FFmpeg executable exists=${ffmpeg.exists()} executable=${ffmpeg.canExecute()} size=${ffmpeg.length()}")
-            log("FFmpeg concat started")
+new = '''            val env = processBuilder.environment()
+            val oldLd = env["LD_LIBRARY_PATH"]
+            val nativeDir = File(context.applicationInfo.nativeLibraryDir)
+            val requiredLd = listOf(libDir.absolutePath, nativeDir.absolutePath)
+                .plus(if (oldLd.isNullOrBlank()) emptyList() else oldLd.split(File.pathSeparator))
+                .distinct()
+                .joinToString(File.pathSeparator)
+            env["LD_LIBRARY_PATH"] = requiredLd
+            log("FFmpeg LD_LIBRARY_PATH: $requiredLd")
+            val process = processBuilder.start()
 '''
 if old not in s:
-    raise SystemExit("FFmpeg logging block not found")
+    raise SystemExit("FFmpeg environment block not found")
 s = s.replace(old, new, 1)
 
-old = '''            put("percent", progress.toInt().coerceIn(0, 100))
+# Make status writes resilient if a transient cleanup removed/recreated the job directory.
+old = '''    private fun writeStatus(dir: File, json: String) {
+        try { File(dir, "android_status.json").writeText(json) } catch (e: Exception) { log("Could not write job status", e) }
+    }
 '''
-new = '''            val safeProgress = progress.toInt().coerceIn(0, 100)
-            put("percent", if (state == "completed") 100 else safeProgress.coerceAtMost(99))
+new = '''    private fun writeStatus(dir: File, json: String) {
+        try {
+            if (!dir.exists()) dir.mkdirs()
+            File(dir, "android_status.json").writeText(json)
+        } catch (e: Exception) {
+            log("Could not write job status", e)
+        }
+    }
 '''
 if old not in s:
-    raise SystemExit("Progress writer block not found")
+    raise SystemExit("Status writer block not found")
 s = s.replace(old, new, 1)
+
 ENGINE.write_text(s, encoding="utf-8")
 
 j = INDEX.read_text(encoding="utf-8")
@@ -124,4 +130,4 @@ if old not in j:
 j = j.replace(old, new, 1)
 INDEX.write_text(j, encoding="utf-8")
 
-print("VP9 FFmpeg and progress fixes applied")
+print("Android FFmpeg executable/library and progress fixes applied")
