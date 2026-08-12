@@ -518,12 +518,8 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val audioQuality = req.optString("audio_quality", "").trim()
             val container = req.optString("merge_output_format", "").trim()
             val videoCodec = req.optString("video_codec", "").trim()
-            val videoCodec = req.optString("video_codec", "").trim()
             jobs[jobId] = dir
             jobStates[jobId] = "running"
-            jobVideoCodecs[jobId] = videoCodec
-            jobFormats[jobId] = format
-            jobUrls[jobId] = url
             jobVideoCodecs[jobId] = videoCodec
             jobFormats[jobId] = format
             jobUrls[jobId] = url
