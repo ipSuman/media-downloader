@@ -13,8 +13,6 @@ import android.webkit.WebViewClient
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
@@ -262,7 +260,6 @@ class YoutubePoTokenProvider(private val context: Context) {
     }
 
     fun getMwebGvsToken(timeoutSeconds: Long = 25): String? {
-        ensureFfmpegExpatRuntime()
         if (!initialized) {
             if (!initLatch.await(timeoutSeconds, TimeUnit.SECONDS) || !initialized) {
                 lastError = lastError ?: "Android BotGuard provider initialization timed out"
@@ -318,23 +315,6 @@ class YoutubePoTokenProvider(private val context: Context) {
     fun onObtainPoTokenError(identifier: String, error: String) { synchronized(tokenLatchLock) { tokenErrors[identifier] = error } }
 
     fun lastError(): String? = lastError
-
-    private fun ensureFfmpegExpatRuntime() {
-        try {
-            val source = File(context.applicationInfo.nativeLibraryDir, "libexpat.so.1")
-            val targetDir = File(context.noBackupFilesDir, "youtubedl-android/packages/ffmpeg/usr/lib")
-            val target = File(targetDir, "libexpat.so.1")
-            if (!source.isFile || source.length() == 0L) {
-                lastError = lastError ?: "Bundled Android Expat library missing from nativeLibraryDir"
-                return
-            }
-            if (!targetDir.isDirectory) targetDir.mkdirs()
-            if (!target.isFile || target.length() != source.length()) {
-                FileInputStream(source).use { input -> FileOutputStream(target).use { output -> input.copyTo(output) } }
-            }
-            target.setReadable(true, false)
-        } catch (e: Exception) { lastError = "Could not prepare FFmpeg Expat runtime: ${e.message}" }
-    }
 
     fun close() {
         mainHandler.post {
