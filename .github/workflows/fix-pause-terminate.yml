@@ -1,0 +1,140 @@
+name: Fix pause and terminate process control
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch LocalEngineServer control path
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p = Path("app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt")
+          s = p.read_text()
+
+          # Prevent runJob() from overwriting a pause/cancel request with
+          # "running" before the yt-dlp process has actually stopped.
+          old = '''            ensureEngine()\n            jobStates[jobId] = "running"\n            writeProgress(dir, "starting", 0.0, null, "Starting download…")'''
+          new = '''            ensureEngine()\n            val stateBeforeStart = jobStates[jobId]\n            if (stateBeforeStart == "paused" || stateBeforeStart == "cancelled") {\n                log("Download $jobId start suppressed because state is $stateBeforeStart")\n                return\n            }\n            jobStates[jobId] = "running"\n            writeProgress(dir, "starting", 0.0, null, "Starting download…")'''
+          if old not in s:
+              raise SystemExit("runJob start block not found")
+          s = s.replace(old, new, 1)
+
+          # Replace the two control calls with a stronger stopper. The library
+          # API is correct, but its child-process helper expects an OS PID while
+          # our process ID is an application job ID. The fallback locates the
+          # app's own libpython/yt-dlp child and kills its descendants.
+          old_calls = s.count('YoutubeDL.getInstance().destroyProcessById(id)')
+          if old_calls < 2:
+              raise SystemExit(f"Expected at least 2 control destroy calls, found {old_calls}")
+          s = s.replace('YoutubeDL.getInstance().destroyProcessById(id)', 'forceStopJobProcess(id)', 2)
+
+          marker = '    private fun controlDownload(id: String, action: String): Response {'
+          if marker not in s:
+              raise SystemExit("controlDownload marker not found")
+
+          helper = r'''    private fun forceStopJobProcess(jobId: String) {
+        var libraryStopped = false
+        try {
+            libraryStopped = YoutubeDL.getInstance().destroyProcessById(jobId)
+            log("yt-dlp library stop for $jobId: $libraryStopped")
+        } catch (e: Exception) {
+            log("yt-dlp library stop failed for $jobId", e)
+        }
+
+        try {
+            val rootPid = android.os.Process.myPid()
+            val parentByPid = HashMap<Int, Int>()
+            val commandByPid = HashMap<Int, String>()
+            val proc = File("/proc")
+            for (entry in proc.listFiles().orEmpty()) {
+                val pid = entry.name.toIntOrNull() ?: continue
+                try {
+                    val status = File(entry, "status").readLines()
+                    val ppidLine = status.firstOrNull { it.startsWith("PPid:") }
+                    val ppid = ppidLine?.substringAfter(":")?.trim()?.toIntOrNull() ?: continue
+                    parentByPid[pid] = ppid
+                    val cmd = File(entry, "cmdline").readBytes()
+                        .toString(Charsets.UTF_8)
+                        .replace('\u0000', ' ')
+                        .trim()
+                    if (cmd.isNotEmpty()) commandByPid[pid] = cmd
+                } catch (_: Exception) { }
+            }
+
+            val roots = commandByPid.entries
+                .filter { (pid, cmd) ->
+                    pid != rootPid &&
+                        (cmd.contains("libpython.so", ignoreCase = true) ||
+                         cmd.contains("yt-dlp", ignoreCase = true))
+                }
+                .map { it.key }
+                .toSet()
+
+            fun belongsToRoot(pid: Int): Boolean {
+                var current = pid
+                val seen = HashSet<Int>()
+                while (current != rootPid && seen.add(current)) {
+                    if (current in roots) return true
+                    current = parentByPid[current] ?: return false
+                }
+                return false
+            }
+
+            val targets = parentByPid.keys.filter { belongsToRoot(it) }
+                .sortedByDescending { it }
+
+            for (pid in targets) {
+                try {
+                    android.os.Process.killProcess(pid)
+                    log("Killed download process pid=$pid for job $jobId")
+                } catch (e: Exception) {
+                    log("Could not kill download process pid=$pid for job $jobId", e)
+                }
+            }
+
+            if (targets.isEmpty() && !libraryStopped) {
+                log("No yt-dlp process found for job $jobId")
+            }
+        } catch (e: Exception) {
+            log("Fallback process scan failed for job $jobId", e)
+        }
+    }
+
+'''
+          s = s.replace(marker, helper + marker, 1)
+
+          p.write_text(s)
+
+          # Safety checks: only the intended control/process changes are allowed.
+          final = p.read_text()
+          if 'YoutubeDL.getInstance().destroyProcessById(id)' in final:
+              raise SystemExit("A direct control destroy call remains")
+          if 'forceStopJobProcess(id)' not in final:
+              raise SystemExit("forceStopJobProcess was not installed")
+          if 'stateBeforeStart' not in final:
+              raise SystemExit("runJob state guard was not installed")
+
+      - name: Commit source patch and remove workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt .github/workflows/fix-pause-terminate.yml
+          git diff --cached --quiet && { echo "No changes to commit"; exit 0; }
+          git commit -m "Fix pause and terminate process control"
+          git push origin HEAD:main
