@@ -10,6 +10,7 @@
     if (value.length !== 6) return null;
     const n = parseInt(value, 16);
     if (Number.isNaN(n)) return null;
+
     return {
       r: (n >> 16) & 255,
       g: (n >> 8) & 255,
@@ -20,35 +21,105 @@
   function readableTextColor(hex) {
     const rgb = hexToRgb(hex);
     if (!rgb) return "#0f1d33";
-    const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+
+    const luminance =
+      (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+
     return luminance > 0.62 ? "#18202a" : "#ffffff";
   }
 
   function applyAccentColor(color) {
-    const value = /^#[0-9a-f]{6}$/i.test(color) ? color : DEFAULT_THEME_COLOR;
+    const value =
+      /^#[0-9a-f]{6}$/i.test(color)
+        ? color
+        : DEFAULT_THEME_COLOR;
+
     const root = document.documentElement;
+
     root.style.setProperty("--md-primary", value);
-    root.style.setProperty("--md-on-primary", readableTextColor(value));
+    root.style.setProperty(
+      "--md-on-primary",
+      readableTextColor(value)
+    );
     root.style.setProperty("--accent", value);
     root.style.setProperty("--accent-dark", value);
 
     const rgb = hexToRgb(value);
+
     if (rgb) {
-      root.style.setProperty("--md-primary-rgb", `${rgb.r},${rgb.g},${rgb.b}`);
-      root.style.setProperty("--md-primary-soft", `rgba(${rgb.r},${rgb.g},${rgb.b},.16)`);
+      root.style.setProperty(
+        "--md-primary-rgb",
+        `${rgb.r},${rgb.g},${rgb.b}`
+      );
+
+      root.style.setProperty(
+        "--md-primary-soft",
+        `rgba(${rgb.r},${rgb.g},${rgb.b},.16)`
+      );
     }
   }
 
+  /*
+   * Apply the selected theme.
+   *
+   * system:
+   *   Follow Android/browser light/dark preference.
+   *
+   * day:
+   *   Force light mode.
+   *
+   * night:
+   *   Force dark mode.
+   */
   function applyThemeMode(mode) {
-    const selected = ["system", "day", "night"].includes(mode) ? mode : "system";
-    const root = document.documentElement;
-    root.classList.toggle("md-theme-light", selected === "day");
-    root.classList.toggle("md-theme-dark", selected === "night");
-    root.dataset.mdTheme = selected;
+    const selected =
+      ["system", "day", "night"].includes(mode)
+        ? mode
+        : "system";
 
-    if (selected === "system") {
-      root.classList.remove("md-theme-light", "md-theme-dark");
+    const root = document.documentElement;
+
+    if (selected === "day") {
+      root.classList.add("md-theme-light");
+      root.classList.remove("md-theme-dark");
+    } else if (selected === "night") {
+      root.classList.remove("md-theme-light");
+      root.classList.add("md-theme-dark");
+    } else {
+      /*
+       * SYSTEM MODE
+       *
+       * Android/browser exposes the current appearance through
+       * prefers-color-scheme.
+       *
+       * Light system preference:
+       *   add md-theme-light
+       *
+       * Dark system preference:
+       *   remove md-theme-light/md-theme-dark so the existing
+       *   dark defaults remain active.
+       */
+      const systemDark =
+        window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches;
+
+      root.classList.remove("md-theme-dark");
+
+      if (systemDark) {
+        root.classList.remove("md-theme-light");
+      } else {
+        root.classList.add("md-theme-light");
+      }
     }
+
+    /*
+     * Keep the user's actual selection as "system",
+     * "day", or "night".
+     *
+     * This is important because the Settings buttons use
+     * this value to determine which button is active.
+     */
+    root.dataset.mdTheme = selected;
   }
 
   function loadThemePreferences() {
@@ -56,12 +127,17 @@
     let color = DEFAULT_THEME_COLOR;
 
     try {
-      mode = localStorage.getItem(THEME_MODE_KEY) || "system";
-      color = localStorage.getItem(THEME_COLOR_KEY) || DEFAULT_THEME_COLOR;
+      mode =
+        localStorage.getItem(THEME_MODE_KEY) || "system";
+
+      color =
+        localStorage.getItem(THEME_COLOR_KEY) ||
+        DEFAULT_THEME_COLOR;
     } catch (_) {}
 
     applyThemeMode(mode);
     applyAccentColor(color);
+
     return { mode, color };
   }
 
@@ -70,6 +146,54 @@
       localStorage.setItem(THEME_MODE_KEY, mode);
       localStorage.setItem(THEME_COLOR_KEY, color);
     } catch (_) {}
+  }
+
+  /*
+   * Follow Android/system theme changes while the app is running.
+   *
+   * Example:
+   *
+   * Android switches:
+   *   Light → Dark
+   *
+   * The app automatically changes:
+   *   Light → Dark
+   *
+   * without requiring the user to reopen the app.
+   */
+  const systemThemeMedia =
+    window.matchMedia
+      ? window.matchMedia("(prefers-color-scheme: dark)")
+      : null;
+
+  function handleSystemThemeChange() {
+    const root = document.documentElement;
+
+    /*
+     * Only react when the user selected SYSTEM.
+     * Manual Day/Night selections must remain untouched.
+     */
+    if (root.dataset.mdTheme === "system") {
+      applyThemeMode("system");
+    }
+  }
+
+  if (systemThemeMedia) {
+    if (typeof systemThemeMedia.addEventListener === "function") {
+      systemThemeMedia.addEventListener(
+        "change",
+        handleSystemThemeChange
+      );
+    } else if (
+      typeof systemThemeMedia.addListener === "function"
+    ) {
+      /*
+       * Older WebView compatibility.
+       */
+      systemThemeMedia.addListener(
+        handleSystemThemeChange
+      );
+    }
   }
 
   function installTheme() {
@@ -138,7 +262,10 @@
 
       html.md-theme-light .mode.active,
       html.md-theme-light #cutSectionToggle[data-state="on"]{
-        background:rgba(var(--md-primary-rgb,168,199,250),.16)!important;
+        background:rgba(
+          var(--md-primary-rgb,168,199,250),
+          .16
+        )!important;
       }
 
       html.md-theme-dark,
@@ -189,7 +316,10 @@
 
       .md-theme-mode.active{
         border-color:var(--md-primary)!important;
-        background:rgba(var(--md-primary-rgb,168,199,250),.16)!important;
+        background:rgba(
+          var(--md-primary-rgb,168,199,250),
+          .16
+        )!important;
         color:var(--md-primary)!important;
       }
 
@@ -223,7 +353,11 @@
       .md-theme-color-value{
         color:var(--md-on-surface-variant)!important;
         font-size:11px;
-        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+        font-family:
+          ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
       }
 
       .md-theme-color-input{
@@ -261,89 +395,144 @@
     const pill = document.createElement("div");
     pill.className = "md-app-pill";
     pill.innerHTML =
-      `<img src="gemini-svg.svg" alt=""> <span>MEDIA DOWNLOADER</span>`;
+      `<img src="gemini-svg.svg" alt="">
+       <span>MEDIA DOWNLOADER</span>`;
 
     app.insertBefore(pill, app.firstChild);
 
-    const logoIcon = document.querySelector(".logo-icon");
+    const logoIcon =
+      document.querySelector(".logo-icon");
 
     if (logoIcon) {
       logoIcon.innerHTML =
-        `<img src="gemini-svg.svg" alt="Media Downloader">`;
+        `<img src="gemini-svg.svg"
+              alt="Media Downloader">`;
     }
 
-    document.querySelectorAll(".app > .card").forEach(card => {
-      const title =
-        card.querySelector(".card-title")?.textContent
-          .trim()
-          .toLowerCase() || "";
+    document
+      .querySelectorAll(".app > .card")
+      .forEach(card => {
+        const title =
+          card
+            .querySelector(".card-title")
+            ?.textContent
+            .trim()
+            .toLowerCase() || "";
 
-      if (title.includes("media url")) {
-        card.classList.add("md-url-card");
-      } else if (card.id === "media") {
-        card.classList.add("md-media-card");
-      } else if (card.querySelector("#queue")) {
-        card.classList.add("md-queue-card");
-      } else if (title.includes("engine")) {
-        card.classList.add("md-engine-card");
-      }
-    });
+        if (title.includes("media url")) {
+          card.classList.add("md-url-card");
+        } else if (card.id === "media") {
+          card.classList.add("md-media-card");
+        } else if (card.querySelector("#queue")) {
+          card.classList.add("md-queue-card");
+        } else if (title.includes("engine")) {
+          card.classList.add("md-engine-card");
+        }
+      });
 
-    document.querySelectorAll(".section-title").forEach(section => {
-      const text = section.textContent.toLowerCase();
+    document
+      .querySelectorAll(".section-title")
+      .forEach(section => {
+        const text =
+          section.textContent.toLowerCase();
 
-      if (text.includes("available formats")) {
-        section.classList.add("md-section-formats");
-      }
+        if (text.includes("available formats")) {
+          section.classList.add("md-section-formats");
+        }
 
-      if (text.includes("download section")) {
-        section.classList.add("md-section-download");
-      }
+        if (text.includes("download section")) {
+          section.classList.add("md-section-download");
+        }
 
-      if (text.includes("options")) {
-        section.classList.add("md-section-options");
-      }
-    });
+        if (text.includes("options")) {
+          section.classList.add("md-section-options");
+        }
+      });
 
-    document.querySelectorAll("button.primary").forEach(button => {
-      const text = button.textContent.toLowerCase();
+    document
+      .querySelectorAll("button.primary")
+      .forEach(button => {
+        const text =
+          button.textContent.toLowerCase();
 
-      if (text.includes("analyze")) {
-        button.classList.add("md-analyze-button");
-      }
+        if (text.includes("analyze")) {
+          button.classList.add("md-analyze-button");
+        }
 
-      if (text.includes("download")) {
-        button.classList.add("md-download-button");
-      }
-    });
+        if (text.includes("download")) {
+          button.classList.add("md-download-button");
+        }
+      });
   }
 
   function installThemeSettings() {
-    if (document.getElementById("mdThemeSettings")) return true;
+    if (
+      document.getElementById("mdThemeSettings")
+    ) {
+      return true;
+    }
 
-    const panel = document.querySelector(".md-settings");
+    const panel =
+      document.querySelector(".md-settings");
+
     if (!panel) return false;
 
     const prefs = loadThemePreferences();
 
-    const section = document.createElement("section");
+    const section =
+      document.createElement("section");
+
     section.id = "mdThemeSettings";
     section.className = "md-theme-settings";
-    section.innerHTML = `
-      <h3 class="md-theme-settings-title">🎨 Theme</h3>
-      <p class="md-theme-settings-subtitle">Choose appearance and accent colour</p>
 
-      <div class="md-theme-mode-group" role="group" aria-label="Theme mode">
-        <button type="button" class="md-theme-mode" data-theme-mode="day">☀️ Day</button>
-        <button type="button" class="md-theme-mode" data-theme-mode="night">🌙 Night</button>
-        <button type="button" class="md-theme-mode" data-theme-mode="system">⚙️ System</button>
+    section.innerHTML = `
+      <h3 class="md-theme-settings-title">
+        🎨 Theme
+      </h3>
+
+      <p class="md-theme-settings-subtitle">
+        Choose appearance and accent colour
+      </p>
+
+      <div
+        class="md-theme-mode-group"
+        role="group"
+        aria-label="Theme mode">
+
+        <button
+          type="button"
+          class="md-theme-mode"
+          data-theme-mode="day">
+          ☀️ Day
+        </button>
+
+        <button
+          type="button"
+          class="md-theme-mode"
+          data-theme-mode="night">
+          🌙 Night
+        </button>
+
+        <button
+          type="button"
+          class="md-theme-mode"
+          data-theme-mode="system">
+          ⚙️ System
+        </button>
       </div>
 
       <div class="md-theme-color-row">
         <div class="md-theme-color-copy">
-          <span class="md-theme-color-label">Accent colour</span>
-          <span class="md-theme-color-value" id="mdThemeColorValue"></span>
+          <span class="md-theme-color-label">
+            Accent colour
+          </span>
+
+          <span
+            class="md-theme-color-value"
+            id="mdThemeColorValue">
+          </span>
         </div>
+
         <input
           id="mdThemeColor"
           class="md-theme-color-input"
@@ -355,20 +544,37 @@
 
     panel.appendChild(section);
 
-    const colorInput = section.querySelector("#mdThemeColor");
-    const colorValue = section.querySelector("#mdThemeColorValue");
-    const modeButtons = section.querySelectorAll("[data-theme-mode]");
+    const colorInput =
+      section.querySelector("#mdThemeColor");
+
+    const colorValue =
+      section.querySelector("#mdThemeColorValue");
+
+    const modeButtons =
+      section.querySelectorAll(
+        "[data-theme-mode]"
+      );
 
     function refreshModeButtons(mode) {
       modeButtons.forEach(button => {
-        const active = button.dataset.themeMode === mode;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-pressed", String(active));
+        const active =
+          button.dataset.themeMode === mode;
+
+        button.classList.toggle(
+          "active",
+          active
+        );
+
+        button.setAttribute(
+          "aria-pressed",
+          String(active)
+        );
       });
     }
 
     function refreshColorValue(color) {
-      colorValue.textContent = color.toUpperCase();
+      colorValue.textContent =
+        color.toUpperCase();
     }
 
     refreshModeButtons(prefs.mode);
@@ -376,18 +582,28 @@
 
     modeButtons.forEach(button => {
       button.addEventListener("click", () => {
-        const mode = button.dataset.themeMode;
-        const color = colorInput.value;
+        const mode =
+          button.dataset.themeMode;
+
+        const color =
+          colorInput.value;
+
         applyThemeMode(mode);
         applyAccentColor(color);
         saveThemePreference(mode, color);
+
         refreshModeButtons(mode);
       });
     });
 
     colorInput.addEventListener("input", () => {
-      const color = colorInput.value;
-      const mode = document.documentElement.dataset.mdTheme || "system";
+      const color =
+        colorInput.value;
+
+      const mode =
+        document.documentElement.dataset.mdTheme ||
+        "system";
+
       applyAccentColor(color);
       saveThemePreference(mode, color);
       refreshColorValue(color);
@@ -412,23 +628,35 @@
     installThemeSettings();
   }
 
-  const themeSettingsObserver = new MutationObserver(() => {
-    installThemeSettings();
-  });
+  const themeSettingsObserver =
+    new MutationObserver(() => {
+      installThemeSettings();
+    });
 
   if (document.body) {
-    themeSettingsObserver.observe(document.body, {
-      childList:true,
-      subtree:true
-    });
-  } else {
-    document.addEventListener("DOMContentLoaded", () => {
-      themeSettingsObserver.observe(document.body, {
+    themeSettingsObserver.observe(
+      document.body,
+      {
         childList:true,
         subtree:true
-      });
-      installThemeSettings();
-    }, { once:true });
+      }
+    );
+  } else {
+    document.addEventListener(
+      "DOMContentLoaded",
+      () => {
+        themeSettingsObserver.observe(
+          document.body,
+          {
+            childList:true,
+            subtree:true
+          }
+        );
+
+        installThemeSettings();
+      },
+      { once:true }
+    );
   }
 
   setTimeout(installTheme, 100);
