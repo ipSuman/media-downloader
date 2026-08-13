@@ -1,0 +1,114 @@
+name: Add Manual Diagnostic Log Button
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch manual diagnostic log endpoint and button
+        shell: python
+        run: |
+          from pathlib import Path
+
+          kt = Path('app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt')
+          s = kt.read_text()
+          old = '''                path == "/logs" -> {
+                    if (logFile.isFile) newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", logFile.readText())
+                    else newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", "No log yet")
+                }'''
+          new = '''                path == "/logs" -> {
+                    log("Manual diagnostic log requested from UI")
+                    exportLogToDownloads()
+                    newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", """{"ok":true,"message":"Diagnostic log generated and saved to Downloads"}""")
+                }'''
+          if old not in s:
+              raise SystemExit('Expected /logs route was not found; refusing to modify Kotlin source.')
+          s = s.replace(old, new, 1)
+          kt.write_text(s)
+
+          js = Path('app/src/main/assets/download-fix.js')
+          s = js.read_text()
+          marker = '  function watchForQualitySelector() {'
+          insertion = '''  function installManualLogButton() {
+    if (byId("manualLogButton")) return;
+    const header = document.querySelector(".header");
+    if (!header) return;
+    const button = document.createElement("button");
+    button.id = "manualLogButton";
+    button.type = "button";
+    button.textContent = "📄 Log";
+    button.title = "Generate diagnostic log now";
+    button.style.cssText = "margin-left:8px;padding:10px 13px;border:1px solid #35c7b5;border-radius:12px;background:#112421;color:#35c7b5;font-weight:800";
+    button.onclick = async () => {
+      button.disabled = true;
+      const oldText = button.textContent;
+      button.textContent = "⏳ Log…";
+      try {
+        const response = await fetch(`${ENGINE}/logs?export=${Date.now()}`, { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.message || "Could not generate log");
+        button.textContent = "✅ Saved";
+      } catch (e) {
+        console.error("Media Downloader: manual log export failed", e);
+        alert(e.message || "Could not generate diagnostic log");
+        button.textContent = oldText;
+      } finally {
+        setTimeout(() => { button.disabled = false; if (button.textContent === "✅ Saved") button.textContent = oldText; }, 1800);
+      }
+    };
+    header.appendChild(button);
+  }
+
+'''
+          if marker not in s:
+              raise SystemExit('Expected JS insertion marker was not found; refusing to modify JS source.')
+          s = s.replace(marker, insertion + marker, 1)
+          s = s.replace('  watchForQualitySelector();\n', '  watchForQualitySelector();\n  installManualLogButton();\n', 1)
+          js.write_text(s)
+
+          print('Manual diagnostic log patch applied.')
+
+      - name: Verify patch
+        shell: bash
+        run: |
+          grep -n 'Manual diagnostic log requested from UI' app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          grep -n 'manualLogButton' app/src/main/assets/download-fix.js
+
+      - name: Commit source patch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt app/src/main/assets/download-fix.js
+          git commit -m "Add manual diagnostic log button"
+          git push origin HEAD:main
+
+      - name: Trigger Android build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run android-build.yml --ref main
+
+      - name: Remove temporary patch workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git rm .github/workflows/add-manual-log-button.yml
+          git commit -m "Remove temporary log patch workflow"
+          git push origin HEAD:main
