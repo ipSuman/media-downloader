@@ -1,0 +1,239 @@
+name: Patch control bridge
+
+on:
+  push:
+    branches: [fix-control-bridge]
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix-control-bridge
+          fetch-depth: 0
+
+      - name: Apply control bridge fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          js = Path("app/src/main/assets/download-fix.js")
+          s = js.read_text()
+
+          old = '''  async function controlJob(jobId, action) {
+    const response = await fetch(`${ENGINE}/download/${encodeURIComponent(jobId)}/control`, { method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ action }) });
+    const text = await response.text();
+    let data; try { data = JSON.parse(text); } catch (_) { throw new Error(`Engine returned invalid control response (HTTP ${response.status})`); }
+    if (!response.ok || !data.ok) throw new Error(data.error || `${action} failed (HTTP ${response.status})`);
+    return data;
+  }
+'''
+
+          new = '''  function controlJob(jobId, action) {
+    if (window.Android && typeof window.Android.controlDownload === "function") {
+      return new Promise((resolve, reject) => {
+        const requestId = `ctl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        if (!window.__mdControlCallbacks) window.__mdControlCallbacks = {};
+        window.__mdControlCallbacks[requestId] = { resolve, reject };
+        try {
+          console.log("Media Downloader: native control request", { jobId, action, requestId });
+          window.Android.controlDownload(String(jobId), String(action), requestId);
+        } catch (e) {
+          delete window.__mdControlCallbacks[requestId];
+          reject(e);
+        }
+      });
+    }
+
+    return fetch(`${ENGINE}/download/${encodeURIComponent(jobId)}/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ action })
+    }).then(async response => {
+      const text = await response.text();
+      let data; try { data = JSON.parse(text); } catch (_) { throw new Error(`Engine returned invalid control response (HTTP ${response.status})`); }
+      if (!response.ok || !data.ok) throw new Error(data.error || `${action} failed (HTTP ${response.status})`);
+      return data;
+    });
+  }
+
+  window.onNativeControlResult = function (requestId, ok, payload) {
+    const cb = window.__mdControlCallbacks && window.__mdControlCallbacks[requestId];
+    if (!cb) return;
+    delete window.__mdControlCallbacks[requestId];
+    if (ok) cb.resolve(payload || { ok: true });
+    else cb.reject(new Error((payload && payload.error) || "Control request failed"));
+  };
+'''
+
+          if old not in s:
+              raise SystemExit("controlJob block not found")
+          s = s.replace(old, new, 1)
+
+          old = '''    controls.className = "md-download-controls";
+    controls.innerHTML = '<button class="pause" type="button">⏸ Pause</button><button class="cancel" type="button">⛔ Terminate</button>';
+    item.appendChild(controls);
+    const pause = controls.querySelector(".pause");
+    const cancel = controls.querySelector(".cancel");
+    pause.onclick = async () => {
+      const paused = pause.dataset.state === "paused"; const action = paused ? "resume" : "pause"; pause.disabled = true;
+      try { await controlJob(jobId, action); } catch (e) { alert(e.message || `${action} failed`); } finally { pause.disabled = false; }
+    };
+    cancel.onclick = async () => {
+      if (!confirm("Terminate this download? The partial file will be discarded.")) return;
+      cancel.disabled = true;
+      try { await controlJob(jobId, "cancel"); } catch (e) { cancel.disabled = false; alert(e.message || "Terminate failed"); }
+    };
+'''
+
+          new = '''    controls.className = "md-download-controls";
+    controls.dataset.jobId = String(jobId);
+    controls.innerHTML = '<button class="pause" type="button">⏸ Pause</button><button class="cancel" type="button">⛔ Terminate</button>';
+    item.appendChild(controls);
+'''
+
+          if old not in s:
+              raise SystemExit("addControls handler block not found")
+          s = s.replace(old, new, 1)
+
+          marker = '''  window.monitorDownload = async function (jobId, item) {
+'''
+          injection = '''  if (!window.__mdControlClickHandlerInstalled) {
+    window.__mdControlClickHandlerInstalled = true;
+    document.addEventListener("click", async (event) => {
+      const target = event.target && event.target.closest ? event.target.closest(".md-download-controls button") : null;
+      if (!target) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const controls = target.closest(".md-download-controls");
+      const jobId = controls && controls.dataset.jobId;
+      if (!jobId) return;
+      const isPause = target.classList.contains("pause");
+      const isCancel = target.classList.contains("cancel");
+      if (!isPause && !isCancel) return;
+      if (isCancel && !confirm("Terminate this download? The partial file will be discarded.")) return;
+
+      const action = isPause ? (target.dataset.state === "paused" ? "resume" : "pause") : "cancel";
+      if (target.disabled) return;
+      target.disabled = true;
+      try {
+        console.log("Media Downloader: control click", { jobId, action });
+        await controlJob(jobId, action);
+      } catch (e) {
+        console.error("Media Downloader: control request failed", { jobId, action, error: e });
+        alert(e.message || `${action} failed`);
+      } finally {
+        if (action !== "cancel") target.disabled = false;
+      }
+    }, true);
+  }
+
+'''
+          if marker not in s:
+              raise SystemExit("monitorDownload marker not found")
+          s = s.replace(marker, injection + marker, 1)
+          js.write_text(s)
+
+          kt = Path("app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt")
+          s = kt.read_text()
+          s = s.replace('import java.io.File\n', 'import java.io.File\nimport java.io.BufferedReader\nimport java.io.InputStreamReader\nimport java.io.OutputStreamWriter\nimport java.net.HttpURLConnection\nimport java.net.URL\n', 1)
+
+          marker = '''    private inner class AndroidBridge {
+'''
+          native = '''    private fun nativeControlDownload(jobId: String, action: String, requestId: String) {
+        Thread {
+            var connection: HttpURLConnection? = null
+            try {
+                val encodedId = java.net.URLEncoder.encode(jobId, "UTF-8")
+                val url = URL("http://127.0.0.1:8765/download/$encodedId/control")
+                android.util.Log.d("MediaDownloader", "CONTROL native POST: job=$jobId action=$action")
+                logControlEvent("CONTROL native POST: job=$jobId action=$action")
+                connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 3000
+                    readTimeout = 5000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Cache-Control", "no-store")
+                }
+                OutputStreamWriter(connection!!.outputStream, Charsets.UTF_8).use { writer ->
+                    writer.write("{\\"action\\":\\"${action.replace("\\\"", "") }\\"}")
+                    writer.flush()
+                }
+                val code = connection!!.responseCode
+                val stream = if (code in 200..299) connection!!.inputStream else connection!!.errorStream
+                val body = stream?.use { InputStreamReader(it, Charsets.UTF_8).use { reader -> BufferedReader(reader).readText() } } ?: ""
+                android.util.Log.d("MediaDownloader", "CONTROL native response: job=$jobId action=$action http=$code body=${body.take(300)}")
+                logControlEvent("CONTROL native response: job=$jobId action=$action http=$code body=${body.take(300)}")
+                val ok = code in 200..299
+                val jsPayload = JSONObjectEscaper.quote(body)
+                webView.post {
+                    webView.evaluateJavascript("window.onNativeControlResult && window.onNativeControlResult(${JSONObjectEscaper.quote(requestId)},$ok,JSON.parse($jsPayload));", null)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MediaDownloader", "CONTROL native request failed: job=$jobId action=$action", e)
+                logControlEvent("CONTROL native request failed: job=$jobId action=$action: ${e.message}")
+                webView.post {
+                    webView.evaluateJavascript("window.onNativeControlResult && window.onNativeControlResult(${JSONObjectEscaper.quote(requestId)},false,{error:${JSONObjectEscaper.quote(e.message ?: "Control request failed")}});", null)
+                }
+            } finally {
+                connection?.disconnect()
+            }
+        }.start()
+    }
+
+    private fun logControlEvent(message: String) {
+        try {
+            val source = File(filesDir, "media-downloader-engine.log")
+            val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
+            source.appendText("[$stamp] $message\\n")
+        } catch (_: Exception) {}
+    }
+
+'''
+          if marker not in s:
+              raise SystemExit("AndroidBridge marker not found")
+          s = s.replace(marker, native + marker, 1)
+
+          old = '''        @JavascriptInterface fun generateDiagnosticLog() { runOnUiThread { this@MainActivity.generateDiagnosticLog() } }
+'''
+          new = '''        @JavascriptInterface fun generateDiagnosticLog() { runOnUiThread { this@MainActivity.generateDiagnosticLog() } }
+        @JavascriptInterface fun controlDownload(jobId: String, action: String, requestId: String) { nativeControlDownload(jobId, action, requestId) }
+'''
+          if old not in s:
+              raise SystemExit("generateDiagnosticLog bridge line not found")
+          s = s.replace(old, new, 1)
+          kt.write_text(s)
+
+          ls = Path("app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt")
+          s = ls.read_text()
+          old = '''                    val action = JSONObject(files["postData"] ?: "{}").optString("action", "")
+                    controlDownload(id, action)
+'''
+          new = '''                    val action = JSONObject(files["postData"] ?: "{}").optString("action", "")
+                    log("CONTROL HTTP request received: job=$id action=$action")
+                    controlDownload(id, action)
+'''
+          if old not in s:
+              raise SystemExit("control route block not found")
+          s = s.replace(old, new, 1)
+          ls.write_text(s)
+
+      - name: Verify patch
+        run: |
+          grep -q 'controlDownload(jobId: String, action: String, requestId: String)' app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt
+          grep -q 'CONTROL HTTP request received' app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          grep -q '__mdControlClickHandlerInstalled' app/src/main/assets/download-fix.js
+
+      - name: Commit patch and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/patch-control-bridge.yml
+          git add app/src/main/assets/download-fix.js app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          git commit -m "fix: route pause terminate through native control bridge"
+          git push origin fix-control-bridge
