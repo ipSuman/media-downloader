@@ -285,13 +285,16 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         val dir = jobs[jobId] ?: return
         val request = jobRequests[jobId] ?: return
         try {
-            ensureEngine()
-            val stateBeforeStart = jobStates[jobId]
-            if (stateBeforeStart == "paused" || stateBeforeStart == "cancelled") {
-                log("Download $jobId start suppressed because state is $stateBeforeStart")
+            val stateBeforeEngine = jobStates[jobId] ?: return
+            if (stateBeforeEngine != "running") {
+                log("Download $jobId start suppressed before engine init: state=$stateBeforeEngine")
                 return
             }
-            jobStates[jobId] = "running"
+            ensureEngine()
+            if (jobStates[jobId] != "running") {
+                log("Download $jobId start suppressed after engine init: state=${jobStates[jobId]}")
+                return
+            }
             writeProgress(dir, "starting", 0.0, null, "Starting download…")
             try {
                 YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
@@ -424,64 +427,80 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     }
 
     private fun forceStopJobProcess(jobId: String) {
-        var libraryStopped = false
-        try {
-            libraryStopped = YoutubeDL.getInstance().destroyProcessById(jobId)
-            log("yt-dlp library stop for $jobId: $libraryStopped")
-        } catch (e: Exception) {
-            log("yt-dlp library stop failed for $jobId", e)
-        }
+        val jobDir = jobs[jobId]
+        val jobMarker = jobDir?.absolutePath ?: jobId
+        log("CONTROL: locating download processes for job=$jobId marker=$jobMarker")
 
         try {
-            val rootPid = android.os.Process.myPid()
+            val appPid = android.os.Process.myPid()
             val parentByPid = HashMap<Int, Int>()
             val commandByPid = HashMap<Int, String>()
+            val exeByPid = HashMap<Int, String>()
+
             for (entry in File("/proc").listFiles().orEmpty()) {
                 val pid = entry.name.toIntOrNull() ?: continue
+                if (pid == appPid) continue
                 try {
-                    val ppid = File(entry, "status").readLines()
+                    val status = File(entry, "status").readText()
+                    val ppid = status.lineSequence()
                         .firstOrNull { it.startsWith("PPid:") }
                         ?.substringAfter(":")?.trim()?.toIntOrNull() ?: continue
                     parentByPid[pid] = ppid
                     val cmd = File(entry, "cmdline").readBytes()
                         .toString(Charsets.UTF_8).replace('\u0000', ' ').trim()
-                    if (cmd.isNotEmpty()) commandByPid[pid] = cmd
-                } catch (_: Exception) { }
+                    commandByPid[pid] = cmd
+                    try { exeByPid[pid] = File(entry, "exe").canonicalPath } catch (_: Exception) {}
+                } catch (_: Exception) {}
             }
 
-            val roots = commandByPid.entries
-                .filter { (pid, cmd) ->
-                    pid != rootPid &&
-                        (cmd.contains("libpython.so", ignoreCase = true) ||
-                         cmd.contains("yt-dlp", ignoreCase = true))
-                }
-                .map { it.key }.toSet()
+            val roots = commandByPid.keys.filter { pid ->
+                val cmd = commandByPid[pid].orEmpty()
+                val exe = exeByPid[pid].orEmpty()
+                cmd.contains(jobMarker, ignoreCase = true) ||
+                    cmd.contains("yt-dlp", ignoreCase = true) ||
+                    cmd.contains("libpython.so", ignoreCase = true) ||
+                    exe.contains("libpython.so", ignoreCase = true) ||
+                    exe.contains("yt-dlp", ignoreCase = true)
+            }.toSet()
 
             fun belongsToRoot(pid: Int): Boolean {
                 var current = pid
                 val seen = HashSet<Int>()
-                while (current != rootPid && seen.add(current)) {
+                while (seen.add(current) && current != appPid) {
                     if (current in roots) return true
                     current = parentByPid[current] ?: return false
                 }
-                return false
+                return current in roots
             }
 
-            val targets = parentByPid.keys.filter { belongsToRoot(it) }
-                .sortedByDescending { it }
+            val targets = (roots + parentByPid.keys.filter { belongsToRoot(it) })
+                .filter { it != appPid }
+                .distinct()
+                .sortedDescending()
+
+            log("CONTROL: found ${targets.size} candidate process(es) for job=$jobId")
             for (pid in targets) {
+                val cmd = commandByPid[pid].orEmpty()
+                log("CONTROL: killing pid=$pid cmd=${cmd.take(240)}")
                 try {
-                    android.os.Process.killProcess(pid)
-                    log("Killed download process pid=$pid for job $jobId")
+                    android.os.Process.sendSignal(pid, android.os.Process.SIGNAL_KILL)
                 } catch (e: Exception) {
-                    log("Could not kill download process pid=$pid for job $jobId", e)
+                    log("CONTROL: sendSignal failed for pid=$pid", e)
+                    try { android.os.Process.killProcess(pid) } catch (_: Exception) {}
                 }
             }
-            if (targets.isEmpty() && !libraryStopped) {
-                log("No yt-dlp process found for job $jobId")
+
+            // Also ask youtubedl-android to cancel its registered Process. Its public
+            // API is the canonical cancellation path; our /proc scan above covers
+            // child processes such as Python/FFmpeg that the library may miss.
+            try {
+                val stopped = YoutubeDL.getInstance().destroyProcessById(jobId)
+                log("CONTROL: youtubedl destroyProcessById($jobId)=$stopped")
+            } catch (e: Exception) {
+                log("CONTROL: youtubedl destroyProcessById failed for $jobId", e)
             }
         } catch (e: Exception) {
-            log("Fallback process scan failed for job $jobId", e)
+            log("CONTROL: process scan failed for job=$jobId", e)
         }
     }
 
