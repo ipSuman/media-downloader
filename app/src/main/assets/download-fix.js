@@ -194,7 +194,7 @@
       const isPause = target.classList.contains("pause");
       const isCancel = target.classList.contains("cancel");
       if (!isPause && !isCancel) return;
-      if (isCancel && !confirm("Terminate this download? The partial file will be discarded.")) return;
+      if (isCancel) console.log("Media Downloader: terminate click", { jobId });
       const action = isPause ? (target.dataset.state === "paused" ? "resume" : "pause") : "cancel";
       if (target.disabled) return;
       target.disabled = true;
