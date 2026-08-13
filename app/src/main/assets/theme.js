@@ -1,6 +1,77 @@
 (function () {
   "use strict";
 
+  const THEME_MODE_KEY = "md-theme-mode";
+  const THEME_COLOR_KEY = "md-theme-color";
+  const DEFAULT_THEME_COLOR = "#a8c7fa";
+
+  function hexToRgb(hex) {
+    const value = hex.replace("#", "");
+    if (value.length !== 6) return null;
+    const n = parseInt(value, 16);
+    if (Number.isNaN(n)) return null;
+    return {
+      r: (n >> 16) & 255,
+      g: (n >> 8) & 255,
+      b: n & 255
+    };
+  }
+
+  function readableTextColor(hex) {
+    const rgb = hexToRgb(hex);
+    if (!rgb) return "#0f1d33";
+    const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+    return luminance > 0.62 ? "#18202a" : "#ffffff";
+  }
+
+  function applyAccentColor(color) {
+    const value = /^#[0-9a-f]{6}$/i.test(color) ? color : DEFAULT_THEME_COLOR;
+    const root = document.documentElement;
+    root.style.setProperty("--md-primary", value);
+    root.style.setProperty("--md-on-primary", readableTextColor(value));
+    root.style.setProperty("--accent", value);
+    root.style.setProperty("--accent-dark", value);
+
+    const rgb = hexToRgb(value);
+    if (rgb) {
+      root.style.setProperty("--md-primary-rgb", `${rgb.r},${rgb.g},${rgb.b}`);
+      root.style.setProperty("--md-primary-soft", `rgba(${rgb.r},${rgb.g},${rgb.b},.16)`);
+    }
+  }
+
+  function applyThemeMode(mode) {
+    const selected = ["system", "day", "night"].includes(mode) ? mode : "system";
+    const root = document.documentElement;
+    root.classList.toggle("md-theme-light", selected === "day");
+    root.classList.toggle("md-theme-dark", selected === "night");
+    root.dataset.mdTheme = selected;
+
+    if (selected === "system") {
+      root.classList.remove("md-theme-light", "md-theme-dark");
+    }
+  }
+
+  function loadThemePreferences() {
+    let mode = "system";
+    let color = DEFAULT_THEME_COLOR;
+
+    try {
+      mode = localStorage.getItem(THEME_MODE_KEY) || "system";
+      color = localStorage.getItem(THEME_COLOR_KEY) || DEFAULT_THEME_COLOR;
+    } catch (_) {}
+
+    applyThemeMode(mode);
+    applyAccentColor(color);
+    return { mode, color };
+  }
+
+  function saveThemePreference(mode, color) {
+    try {
+      localStorage.setItem(THEME_MODE_KEY, mode);
+      localStorage.setItem(THEME_COLOR_KEY, color);
+    } catch (_) {}
+  }
+
   function installTheme() {
     if (document.getElementById("mdColorTheme")) return;
 
@@ -26,364 +97,158 @@
         --md-on-surface-variant:#c4c6d0;
       }
 
-      body{
-        background:var(--md-surface)!important;
+      html.md-theme-light{
+        --md-surface:#f8f9ff;
+        --md-surface-container:#eef0f7;
+        --md-surface-container-high:#e4e7ef;
+        --md-outline:#747780;
+        --md-outline-variant:#c5c7d0;
+        --md-on-surface:#1a1b20;
+        --md-on-surface-variant:#44464f;
+        --md-secondary:#5b6070;
+        --md-on-secondary:#ffffff;
+        --md-tertiary:#73567c;
+        --md-on-tertiary:#ffffff;
+        --md-success:#2e7d32;
+        --md-error:#ba1a1a;
+      }
+
+      html.md-theme-light body{
         color:var(--md-on-surface)!important;
       }
 
-      .app{
-        color:var(--md-on-surface)!important;
-      }
-
-      .card{
+      html.md-theme-light .md-app-pill{
         background:var(--md-surface-container)!important;
-        border-color:var(--md-outline-variant)!important;
-        border-radius:20px!important;
-        box-shadow:none!important;
       }
 
-      input,
-      select,
-      textarea{
-        background:var(--md-surface-container-high)!important;
+      html.md-theme-light .card,
+      html.md-theme-light .md-url-card,
+      html.md-theme-light .md-media-card,
+      html.md-theme-light .md-queue-card,
+      html.md-theme-light .md-engine-card,
+      html.md-theme-light .md-settings{
+        box-shadow:0 2px 8px rgba(20,25,35,.08)!important;
+      }
+
+      html.md-theme-light .primary,
+      html.md-theme-light .md-download-button,
+      html.md-theme-light #mdChooseFolder{
+        color:var(--md-on-primary)!important;
+      }
+
+      html.md-theme-light .mode.active,
+      html.md-theme-light #cutSectionToggle[data-state="on"]{
+        background:rgba(var(--md-primary-rgb,168,199,250),.16)!important;
+      }
+
+      html.md-theme-dark,
+      html:not(.md-theme-light){
+        color-scheme:dark;
+      }
+
+      html.md-theme-light{
+        color-scheme:light;
+      }
+
+      .md-theme-settings{
+        margin-top:18px;
+        padding-top:16px;
+        border-top:1px solid var(--md-outline-variant);
+      }
+
+      .md-theme-settings-title{
+        margin:0 0 5px;
         color:var(--md-on-surface)!important;
-        border:1px solid var(--md-outline)!important;
-        border-radius:14px!important;
+        font-size:16px;
+        font-weight:800;
       }
 
-      input:focus,
-      select:focus,
-      textarea:focus{
-        outline:none!important;
-        border-color:var(--md-primary)!important;
-        box-shadow:0 0 0 2px rgba(168,199,250,.18)!important;
-      }
-
-      label,
-      .hint,
-      .small,
-      .muted{
+      .md-theme-settings-subtitle{
+        margin:0 0 13px;
         color:var(--md-on-surface-variant)!important;
+        font-size:12px;
       }
 
-      .section-title{
-        color:var(--md-on-surface)!important;
-        font-weight:700;
+      .md-theme-mode-group{
+        display:grid;
+        grid-template-columns:repeat(3,1fr);
+        gap:7px;
+        margin-bottom:15px;
       }
 
-      .md-app-pill{
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        gap:9px;
-        width:max-content;
-        max-width:100%;
-        margin:0 auto 14px;
-        padding:7px 16px 7px 9px;
-        border:1px solid var(--md-outline-variant);
-        border-radius:999px;
-        background:var(--md-surface-container-high);
-        color:var(--md-on-surface);
-        font-size:13px;
-        font-weight:950;
-        letter-spacing:1.2px;
-        text-align:center;
-      }
-
-      .md-app-pill img{
-        width:32px;
-        height:32px;
-        border-radius:9px;
-        flex:0 0 32px;
-      }
-
-      .settings{
-        width:63px!important;
-        height:63px!important;
-        min-width:63px!important;
-        border-radius:18px!important;
-        font-size:30px!important;
+      .md-theme-mode{
+        min-height:46px!important;
+        padding:8px 6px!important;
         border:1px solid var(--md-outline)!important;
-        background:var(--md-surface-container-high)!important;
-        color:var(--md-primary)!important;
-        box-shadow:none!important;
-      }
-
-      .settings:active{
-        transform:scale(.96);
-      }
-
-      .md-log-button{
-        width:63px!important;
-        height:63px!important;
-        min-width:63px!important;
-        padding:0!important;
-        border-radius:18px!important;
-        border:1px solid var(--md-outline)!important;
-        background:var(--md-surface-container-high)!important;
-        color:var(--md-primary)!important;
-        font-size:28px!important;
-        box-shadow:none!important;
-      }
-
-      .md-log-button:active{
-        transform:scale(.96);
-      }
-
-      .logo-icon{
-        width:46px!important;
-        height:46px!important;
-        padding:0!important;
+        border-radius:16px!important;
         background:transparent!important;
-        border-radius:14px!important;
-        overflow:hidden!important;
+        color:var(--md-on-surface-variant)!important;
+        font-size:12px!important;
+        font-weight:750!important;
       }
 
-      .logo-icon img{
-        width:100%;
-        height:100%;
-        display:block;
-        border-radius:14px;
+      .md-theme-mode.active{
+        border-color:var(--md-primary)!important;
+        background:rgba(var(--md-primary-rgb,168,199,250),.16)!important;
+        color:var(--md-primary)!important;
       }
 
-      .md-url-card,
-      .md-media-card,
-      .md-queue-card,
-      .md-engine-card{
-        border:1px solid var(--md-outline-variant)!important;
-        background:var(--md-surface-container)!important;
-        box-shadow:none!important;
-        border-radius:20px!important;
-      }
-
-      .md-url-card .card-title,
-      .md-media-card .card-title,
-      .md-queue-card .card-title,
-      .md-engine-card .card-title{
-        color:var(--md-on-surface)!important;
-      }
-
-      .md-section-formats,
-      .md-section-download,
-      .md-section-options{
-        color:var(--md-on-surface)!important;
-      }
-
-      button,
-      button.primary,
-      .paste,
-      .mode,
-      .md-analyze-button,
-      .md-download-button{
-        min-height:48px;
-        border-radius:24px!important;
-        border:1px solid var(--md-outline)!important;
-        font-weight:700;
-        letter-spacing:.1px;
-        transition:
-          background .15s ease,
-          border-color .15s ease,
-          transform .08s ease,
-          opacity .15s ease;
-      }
-
-      button:active{
+      .md-theme-mode:active{
         transform:scale(.97);
       }
 
-      button:disabled{
-        opacity:.38!important;
+      .md-theme-color-row{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+        padding:11px 12px;
+        border:1px solid var(--md-outline-variant);
+        border-radius:16px;
+        background:var(--md-surface-container-high);
       }
 
-      .primary,
-      .md-download-button{
-        border-color:var(--md-primary)!important;
-        background:var(--md-primary)!important;
-        color:var(--md-on-primary)!important;
+      .md-theme-color-copy{
+        min-width:0;
       }
 
-      .paste,
-      .md-analyze-button{
-        border-color:var(--md-secondary)!important;
-        background:var(--md-surface-container-high)!important;
+      .md-theme-color-label{
+        display:block;
+        margin:0 0 3px;
         color:var(--md-on-surface)!important;
+        font-size:13px;
+        font-weight:750;
       }
 
-      .mode{
-        background:transparent!important;
+      .md-theme-color-value{
         color:var(--md-on-surface-variant)!important;
+        font-size:11px;
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
       }
 
-      .mode.active{
-        border-color:var(--md-primary)!important;
-        background:rgba(168,199,250,.16)!important;
-        color:var(--md-primary)!important;
-      }
-
-      .md-download-controls .pause{
-        border-color:var(--md-success)!important;
-        background:rgba(165,214,167,.12)!important;
-        color:var(--md-success)!important;
-      }
-
-      .md-download-controls .cancel{
-        border-color:var(--md-error)!important;
-        background:rgba(255,180,171,.12)!important;
-        color:var(--md-error)!important;
-      }
-
-      .time-grid{
-        padding:16px!important;
-        border:1px solid var(--md-outline-variant)!important;
-        border-radius:20px!important;
-        background:var(--md-surface-container-high)!important;
-      }
-
-      .time-grid label{
-        color:var(--md-on-surface-variant)!important;
-        font-weight:600;
-      }
-
-      #cutSectionButton{
-        border-color:var(--md-outline)!important;
-        background:transparent!important;
-        color:var(--md-on-surface)!important;
-      }
-
-      #cutSectionToggle[data-state="on"]{
-        border-color:var(--md-primary)!important;
-        background:rgba(168,199,250,.16)!important;
-        color:var(--md-primary)!important;
-      }
-
-      .checks input{
-        accent-color:var(--md-primary);
-      }
-
-      .queue-item{
-        border:1px solid var(--md-outline-variant)!important;
-        background:var(--md-surface-container-high)!important;
-        border-radius:16px!important;
-      }
-
-      .progress-bar{
-        background:var(--md-primary)!important;
-      }
-
-      .md-settings{
-        border:1px solid var(--md-outline-variant)!important;
-        background:var(--md-surface-container)!important;
-        border-radius:28px!important;
-        box-shadow:0 12px 32px rgba(0,0,0,.35)!important;
-      }
-
-      .md-settings-title{
-        color:var(--md-on-surface)!important;
-      }
-
-      .md-folder{
+      .md-theme-color-input{
+        width:52px!important;
+        height:42px!important;
+        min-width:52px!important;
+        padding:3px!important;
         border:1px solid var(--md-outline)!important;
-        background:var(--md-surface-container-high)!important;
-        color:var(--md-on-surface)!important;
-        border-radius:16px!important;
+        border-radius:14px!important;
+        background:var(--md-surface-container)!important;
+        cursor:pointer;
       }
 
-      #mdChooseFolder{
-        background:var(--md-primary)!important;
-        color:var(--md-on-primary)!important;
-        border-color:var(--md-primary)!important;
+      .md-theme-color-input::-webkit-color-swatch-wrapper{
+        padding:0;
       }
 
-      #mdResetFolder{
-        border-color:var(--md-outline)!important;
-        background:transparent!important;
-        color:var(--md-on-surface)!important;
-      }
-
-      .md-close{
-        border-color:var(--md-outline)!important;
-        background:transparent!important;
-        color:var(--md-on-surface)!important;
-      }
-
-      /* =========================================================
-         MATERIAL 3 REFINEMENTS
-         ========================================================= */
-
-      button:hover,
-      .settings:hover,
-      .md-log-button:hover,
-      .md-close:hover{
-        border-color:var(--md-primary)!important;
-      }
-
-      .primary:hover,
-      .md-download-button:hover,
-      #mdChooseFolder:hover{
-        filter:brightness(1.04);
-      }
-
-      button:focus-visible,
-      .settings:focus-visible,
-      .md-log-button:focus-visible,
-      input:focus-visible,
-      select:focus-visible,
-      textarea:focus-visible{
-        outline:2px solid var(--md-primary)!important;
-        outline-offset:2px!important;
-      }
-
-      .md-settings{
-        transition:transform .22s ease,opacity .22s ease;
-      }
-
-      .md-settings button,
-      .md-settings input,
-      .md-settings select{
-        font-size:15px;
-      }
-
-      ::-webkit-scrollbar{
-        width:8px;
-        height:8px;
-      }
-
-      ::-webkit-scrollbar-track{
-        background:transparent;
-      }
-
-      ::-webkit-scrollbar-thumb{
-        background:var(--md-outline-variant);
-        border-radius:999px;
-      }
-
-      ::-webkit-scrollbar-thumb:hover{
-        background:var(--md-outline);
-      }
-
-      @media(prefers-reduced-motion:reduce){
-        *,
-        *::before,
-        *::after{
-          scroll-behavior:auto!important;
-          transition:none!important;
-          animation:none!important;
-        }
+      .md-theme-color-input::-webkit-color-swatch{
+        border:0;
+        border-radius:10px;
       }
 
       @media(max-width:420px){
-        .settings{
-          width:57px!important;
-          height:57px!important;
-          min-width:57px!important;
-          font-size:27px!important;
-        }
-
-        .md-log-button{
-          width:57px!important;
-          height:57px!important;
-          min-width:57px!important;
-          font-size:25px!important;
+        .md-theme-mode{
+          font-size:11px!important;
         }
       }
     `;
@@ -453,17 +318,121 @@
     });
   }
 
+  function installThemeSettings() {
+    if (document.getElementById("mdThemeSettings")) return true;
+
+    const panel = document.querySelector(".md-settings");
+    if (!panel) return false;
+
+    const prefs = loadThemePreferences();
+
+    const section = document.createElement("section");
+    section.id = "mdThemeSettings";
+    section.className = "md-theme-settings";
+    section.innerHTML = `
+      <h3 class="md-theme-settings-title">🎨 Theme</h3>
+      <p class="md-theme-settings-subtitle">Choose appearance and accent colour</p>
+
+      <div class="md-theme-mode-group" role="group" aria-label="Theme mode">
+        <button type="button" class="md-theme-mode" data-theme-mode="day">☀️ Day</button>
+        <button type="button" class="md-theme-mode" data-theme-mode="night">🌙 Night</button>
+        <button type="button" class="md-theme-mode" data-theme-mode="system">⚙️ System</button>
+      </div>
+
+      <div class="md-theme-color-row">
+        <div class="md-theme-color-copy">
+          <span class="md-theme-color-label">Accent colour</span>
+          <span class="md-theme-color-value" id="mdThemeColorValue"></span>
+        </div>
+        <input
+          id="mdThemeColor"
+          class="md-theme-color-input"
+          type="color"
+          value="${prefs.color}"
+          aria-label="Choose accent colour">
+      </div>
+    `;
+
+    panel.appendChild(section);
+
+    const colorInput = section.querySelector("#mdThemeColor");
+    const colorValue = section.querySelector("#mdThemeColorValue");
+    const modeButtons = section.querySelectorAll("[data-theme-mode]");
+
+    function refreshModeButtons(mode) {
+      modeButtons.forEach(button => {
+        const active = button.dataset.themeMode === mode;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+      });
+    }
+
+    function refreshColorValue(color) {
+      colorValue.textContent = color.toUpperCase();
+    }
+
+    refreshModeButtons(prefs.mode);
+    refreshColorValue(prefs.color);
+
+    modeButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        const mode = button.dataset.themeMode;
+        const color = colorInput.value;
+        applyThemeMode(mode);
+        applyAccentColor(color);
+        saveThemePreference(mode, color);
+        refreshModeButtons(mode);
+      });
+    });
+
+    colorInput.addEventListener("input", () => {
+      const color = colorInput.value;
+      const mode = document.documentElement.dataset.mdTheme || "system";
+      applyAccentColor(color);
+      saveThemePreference(mode, color);
+      refreshColorValue(color);
+    });
+
+    return true;
+  }
+
+  loadThemePreferences();
+  installTheme();
+
   if (document.readyState === "loading") {
     document.addEventListener(
       "DOMContentLoaded",
-      installTheme,
+      () => {
+        installTheme();
+        installThemeSettings();
+      },
       { once:true }
     );
   } else {
-    installTheme();
+    installThemeSettings();
+  }
+
+  const themeSettingsObserver = new MutationObserver(() => {
+    installThemeSettings();
+  });
+
+  if (document.body) {
+    themeSettingsObserver.observe(document.body, {
+      childList:true,
+      subtree:true
+    });
+  } else {
+    document.addEventListener("DOMContentLoaded", () => {
+      themeSettingsObserver.observe(document.body, {
+        childList:true,
+        subtree:true
+      });
+      installThemeSettings();
+    }, { once:true });
   }
 
   setTimeout(installTheme, 100);
   setTimeout(installTheme, 600);
+  setTimeout(installThemeSettings, 700);
 
 })();
