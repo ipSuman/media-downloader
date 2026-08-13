@@ -10,6 +10,11 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
 import java.io.File
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
 
 class MainActivity : AppCompatActivity() {
 
@@ -364,6 +369,56 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun nativeControlDownload(jobId: String, action: String, requestId: String) {
+        Thread {
+            var connection: HttpURLConnection? = null
+            try {
+                val encodedId = java.net.URLEncoder.encode(jobId, "UTF-8")
+                val url = URL("http://127.0.0.1:8765/download/$encodedId/control")
+                android.util.Log.d("MediaDownloader", "CONTROL native POST: job=$jobId action=$action")
+                logControlEvent("CONTROL native POST: job=$jobId action=$action")
+                connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 3000
+                    readTimeout = 5000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Cache-Control", "no-store")
+                }
+                OutputStreamWriter(connection!!.outputStream, Charsets.UTF_8).use { writer ->
+                    writer.write("{\"action\":\"${action.replace("\"", "")}\"}")
+                    writer.flush()
+                }
+                val code = connection!!.responseCode
+                val stream = if (code in 200..299) connection!!.inputStream else connection!!.errorStream
+                val body = stream?.use { InputStreamReader(it, Charsets.UTF_8).use { reader -> BufferedReader(reader).readText() } } ?: ""
+                android.util.Log.d("MediaDownloader", "CONTROL native response: job=$jobId action=$action http=$code body=${body.take(300)}")
+                logControlEvent("CONTROL native response: job=$jobId action=$action http=$code body=${body.take(300)}")
+                val ok = code in 200..299
+                val jsPayload = JSONObjectEscaper.quote(body)
+                webView.post {
+                    webView.evaluateJavascript("window.onNativeControlResult && window.onNativeControlResult(${JSONObjectEscaper.quote(requestId)},$ok,JSON.parse($jsPayload));", null)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MediaDownloader", "CONTROL native request failed: job=$jobId action=$action", e)
+                logControlEvent("CONTROL native request failed: job=$jobId action=$action: ${e.message}")
+                webView.post {
+                    webView.evaluateJavascript("window.onNativeControlResult && window.onNativeControlResult(${JSONObjectEscaper.quote(requestId)},false,{error:${JSONObjectEscaper.quote(e.message ?: "Control request failed")}});", null)
+                }
+            } finally {
+                connection?.disconnect()
+            }
+        }.start()
+    }
+
+    private fun logControlEvent(message: String) {
+        try {
+            val source = File(filesDir, "media-downloader-engine.log")
+            val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
+            source.appendText("[$stamp] $message\n")
+        } catch (_: Exception) {}
+    }
+
     private inner class AndroidBridge {
         @JavascriptInterface fun chooseDownloadFolder() { runOnUiThread { openFolderPicker() } }
         @JavascriptInterface fun clearDownloadFolder() { runOnUiThread { clearSelectedFolder() } }
@@ -372,6 +427,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun clearYoutubeCookies() { runOnUiThread { this@MainActivity.clearYoutubeCookies() } }
         @JavascriptInterface fun hasYoutubeCookies(): Boolean = File(filesDir, "youtube-cookies.txt").isFile && File(filesDir, "youtube-cookies.txt").length() > 0L
         @JavascriptInterface fun generateDiagnosticLog() { runOnUiThread { this@MainActivity.generateDiagnosticLog() } }
+        @JavascriptInterface fun controlDownload(jobId: String, action: String, requestId: String) { nativeControlDownload(jobId, action, requestId) }
     }
 
     private object JSONObjectEscaper {

@@ -714,6 +714,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     val id = path.removePrefix("/download/").removeSuffix("/control").trim('/')
                     val files = HashMap<String, String>(); session.parseBody(files)
                     val action = JSONObject(files["postData"] ?: "{}").optString("action", "")
+                    log("CONTROL HTTP request received: job=$id action=$action")
                     controlDownload(id, action)
                 }
                 path.startsWith("/status/") -> {

@@ -136,31 +136,78 @@
     setTimeout(installMergeToggle, 300);
   }
 
-  async function controlJob(jobId, action) {
-    const response = await fetch(`${ENGINE}/download/${encodeURIComponent(jobId)}/control`, { method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store", body: JSON.stringify({ action }) });
-    const text = await response.text();
-    let data; try { data = JSON.parse(text); } catch (_) { throw new Error(`Engine returned invalid control response (HTTP ${response.status})`); }
-    if (!response.ok || !data.ok) throw new Error(data.error || `${action} failed (HTTP ${response.status})`);
-    return data;
+  function controlJob(jobId, action) {
+    if (window.Android && typeof window.Android.controlDownload === "function") {
+      return new Promise((resolve, reject) => {
+        const requestId = `ctl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        if (!window.__mdControlCallbacks) window.__mdControlCallbacks = {};
+        window.__mdControlCallbacks[requestId] = { resolve, reject };
+        try {
+          console.log("Media Downloader: native control request", { jobId, action, requestId });
+          window.Android.controlDownload(String(jobId), String(action), requestId);
+        } catch (e) {
+          delete window.__mdControlCallbacks[requestId];
+          reject(e);
+        }
+      });
+    }
+    return fetch(`${ENGINE}/download/${encodeURIComponent(jobId)}/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ action })
+    }).then(async response => {
+      const text = await response.text();
+      let data; try { data = JSON.parse(text); } catch (_) { throw new Error(`Engine returned invalid control response (HTTP ${response.status})`); }
+      if (!response.ok || !data.ok) throw new Error(data.error || `${action} failed (HTTP ${response.status})`);
+      return data;
+    });
   }
+
+  window.onNativeControlResult = function (requestId, ok, payload) {
+    const cb = window.__mdControlCallbacks && window.__mdControlCallbacks[requestId];
+    if (!cb) return;
+    delete window.__mdControlCallbacks[requestId];
+    if (ok) cb.resolve(payload || { ok: true });
+    else cb.reject(new Error((payload && payload.error) || "Control request failed"));
+  };
 
   function addControls(item, jobId) {
     if (item.querySelector(".md-download-controls")) return;
     const controls = document.createElement("div");
     controls.className = "md-download-controls";
+    controls.dataset.jobId = String(jobId);
     controls.innerHTML = '<button class="pause" type="button">⏸ Pause</button><button class="cancel" type="button">⛔ Terminate</button>';
     item.appendChild(controls);
-    const pause = controls.querySelector(".pause");
-    const cancel = controls.querySelector(".cancel");
-    pause.onclick = async () => {
-      const paused = pause.dataset.state === "paused"; const action = paused ? "resume" : "pause"; pause.disabled = true;
-      try { await controlJob(jobId, action); } catch (e) { alert(e.message || `${action} failed`); } finally { pause.disabled = false; }
-    };
-    cancel.onclick = async () => {
-      if (!confirm("Terminate this download? The partial file will be discarded.")) return;
-      cancel.disabled = true;
-      try { await controlJob(jobId, "cancel"); } catch (e) { cancel.disabled = false; alert(e.message || "Terminate failed"); }
-    };
+  }
+
+  if (!window.__mdControlClickHandlerInstalled) {
+    window.__mdControlClickHandlerInstalled = true;
+    document.addEventListener("click", async (event) => {
+      const target = event.target && event.target.closest ? event.target.closest(".md-download-controls button") : null;
+      if (!target) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const controls = target.closest(".md-download-controls");
+      const jobId = controls && controls.dataset.jobId;
+      if (!jobId) return;
+      const isPause = target.classList.contains("pause");
+      const isCancel = target.classList.contains("cancel");
+      if (!isPause && !isCancel) return;
+      if (isCancel && !confirm("Terminate this download? The partial file will be discarded.")) return;
+      const action = isPause ? (target.dataset.state === "paused" ? "resume" : "pause") : "cancel";
+      if (target.disabled) return;
+      target.disabled = true;
+      try {
+        console.log("Media Downloader: control click", { jobId, action });
+        await controlJob(jobId, action);
+      } catch (e) {
+        console.error("Media Downloader: control request failed", { jobId, action, error: e });
+        alert(e.message || `${action} failed`);
+      } finally {
+        if (action !== "cancel") target.disabled = false;
+      }
+    }, true);
   }
 
   window.monitorDownload = async function (jobId, item) {
