@@ -94,10 +94,23 @@
       .md-queue-card{border-color:#69479b!important;box-shadow:0 5px 22px rgba(167,123,255,.07)}
       .md-engine-card{border-color:#367b57!important;box-shadow:0 5px 22px rgba(85,214,138,.07)}
 
-      .md-url-card .card-title{color:var(--md-teal)}
-      .md-media-card .card-title{color:var(--md-blue)}
-      .md-queue-card .card-title{color:var(--md-purple)}
-      .md-engine-card .card-title{color:var(--md-green)}
+      /* Material 3 surfaces */
+      .md-url-card,
+      .md-media-card,
+      .md-queue-card,
+      .md-engine-card{
+        border:1px solid var(--md-outline-variant)!important;
+        background:var(--md-surface-container)!important;
+        box-shadow:none!important;
+        border-radius:20px!important;
+      }
+
+      .md-url-card .card-title,
+      .md-media-card .card-title,
+      .md-queue-card .card-title,
+      .md-engine-card .card-title{
+        color:var(--md-on-surface)!important;
+      }
 
       /* Section colours */
       .md-section-formats{color:var(--md-blue)!important}
@@ -105,44 +118,104 @@
       .md-section-options{color:var(--md-purple)!important}
 
       /* Buttons */
-      .paste{
-        border-color:#68459b!important;
-        background:#282038!important;
-        color:var(--md-purple)!important;
+      /* Material 3 buttons */
+      button,
+      button.primary,
+      .paste,
+      .mode,
+      .md-analyze-button,
+      .md-download-button{
+        min-height:48px;
+        border-radius:24px!important;
+        border:1px solid var(--md-outline)!important;
+        font-weight:700;
+        letter-spacing:.1px;
+        transition:
+          background .15s ease,
+          border-color .15s ease,
+          transform .08s ease,
+          opacity .15s ease;
       }
-      .primary{background:var(--md-teal)!important}
-      .md-analyze-button{background:var(--md-blue)!important;color:#07131f!important}
-      .md-download-button{background:var(--md-orange)!important;color:#241507!important}
 
-      .mode:nth-child(1){border-color:#2d8378!important;color:var(--md-teal)!important}
-      .mode:nth-child(2){border-color:#a05b7a!important;color:var(--md-pink)!important}
-      .mode:nth-child(3){border-color:#7053a8!important;color:var(--md-purple)!important}
-      .mode.active:nth-child(1){background:#112e2a!important}
-      .mode.active:nth-child(2){background:#321e2a!important}
-      .mode.active:nth-child(3){background:#281d3b!important}
+      button:active{
+        transform:scale(.97);
+      }
 
+      button:disabled{
+        opacity:.38!important;
+      }
+
+      /* Primary */
+      .primary,
+      .md-download-button{
+        border-color:var(--md-primary)!important;
+        background:var(--md-primary)!important;
+        color:var(--md-on-primary)!important;
+      }
+
+      /* Secondary / tonal */
+      .paste,
+      .md-analyze-button{
+        border-color:var(--md-secondary)!important;
+        background:var(--md-surface-container-high)!important;
+        color:var(--md-on-surface)!important;
+      }
+
+      /* Segmented mode controls */
+      .mode{
+        background:transparent!important;
+        color:var(--md-on-surface-variant)!important;
+      }
+
+      .mode.active{
+        border-color:var(--md-primary)!important;
+        background:rgba(168,199,250,.16)!important;
+        color:var(--md-primary)!important;
+      }
+
+      /* Pause / Resume */
+      .md-download-controls .pause{
+        border-color:var(--md-success)!important;
+        background:rgba(165,214,167,.12)!important;
+        color:var(--md-success)!important;
+      }
+
+      /* Terminate */
+      .md-download-controls .cancel{
+        border-color:var(--md-error)!important;
+        background:rgba(255,180,171,.12)!important;
+        color:var(--md-error)!important;
+      }
+
+      /* Material 3 time selector */
       .time-grid{
-        padding:12px;
-        border:1px solid #754f31;
-        border-radius:14px;
-        background:#251d18;
+        padding:16px!important;
+        border:1px solid var(--md-outline-variant)!important;
+        border-radius:20px!important;
+        background:var(--md-surface-container-high)!important;
       }
-      .time-grid label{color:#ffb66b!important}
 
-      #cutSectionButton{
-        border-color:#a7652c!important;
-        background:#352217!important;
-        color:var(--md-orange)!important;
+      .time-grid label{
+        color:var(--md-on-surface-variant)!important;
+        font-weight:600;
       }
+
+      /* Material 3 cut-section control */
+        #cutSectionButton{
+        border-color:var(--md-outline)!important;
+        background:transparent!important;
+        color:var(--md-on-surface)!important;
+       }
+
       #cutSectionToggle[data-state="on"]{
-        border-color:#367b57!important;
-        background:#173025!important;
-        color:var(--md-green)!important;
+        border-color:var(--md-primary)!important;
+        background:rgba(168,199,250,.16)!important;
+        color:var(--md-primary)!important;
       }
 
-      .checks .check:nth-child(1) input{accent-color:var(--md-blue)}
-      .checks .check:nth-child(2) input{accent-color:var(--md-purple)}
-      .checks .check:nth-child(3) input{accent-color:var(--md-orange)}
+      .checks input{
+        accent-color:var(--md-primary);
+      }
 
       .queue-item{border-color:#49356a!important;background:#211b2d!important}
       .progress-bar{background:linear-gradient(90deg,var(--md-purple),var(--md-blue))!important}
