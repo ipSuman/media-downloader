@@ -43,12 +43,41 @@ jobs:
         with:
           gradle-version: "8.7"
 
+      - name: Restore release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/media-downloader-release.jks"
+          test -s "$RUNNER_TEMP/media-downloader-release.jks"
+
       - name: Build Release APK
         run: gradle assembleRelease --stacktrace
 
-      - name: Upload Release APK
+      - name: Sign Release APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+          SIGNED_APK="app/build/outputs/apk/release/MediaDownloader-v0.2.0.apk"
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+
+          "$APKSIGNER" sign \
+            --ks "$RUNNER_TEMP/media-downloader-release.jks" \
+            --ks-key-alias media-downloader \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --key-pass env:ANDROID_KEY_PASSWORD \
+            --out "$SIGNED_APK" \
+            "$APK"
+
+          "$APKSIGNER" verify --verbose "$SIGNED_APK"
+          test -s "$SIGNED_APK"
+          rm -f "$APK"
+          rm -f "$RUNNER_TEMP/media-downloader-release.jks"
+
+      - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: MediaDownloader-release-unsigned
-          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          name: MediaDownloader-release-v0.2.0
+          path: app/build/outputs/apk/release/MediaDownloader-v0.2.0.apk
           if-no-files-found: error
