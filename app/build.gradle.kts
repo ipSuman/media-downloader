@@ -70,11 +70,22 @@ val copyLibcxxShared by tasks.registering(Copy::class) {
 
 android.applicationVariants.all {
     val variantName = name.replaceFirstChar { it.uppercase() }
+
     tasks.named("merge${variantName}Assets").configure {
         dependsOn(copyWebApp)
     }
+
     tasks.named("merge${variantName}JniLibFolders").configure {
         dependsOn(copyLibcxxShared)
+    }
+
+    // Release lint also reads generated assets. Declare the dependency
+    // explicitly so Gradle 8.7 does not reject the build for task ordering.
+    tasks.matching {
+        it.name == "generate${variantName}LintVitalReportModel" ||
+            it.name == "lintVitalAnalyze${variantName}"
+    }.configureEach {
+        dependsOn(copyWebApp)
     }
 }
 
