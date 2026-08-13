@@ -429,7 +429,6 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     }
                     jobStates[id] = "paused"
                     YoutubeDL.getInstance().destroyProcessById(id)
-                    ffmpegProcesses[id]?.destroy()
                     writeStatus(dir, """{"status":"paused","percent":${readPercent(dir)}}""")
                     log("Pause requested for download $id")
                 }
@@ -448,7 +447,6 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     }
                     jobStates[id] = "cancelled"
                     YoutubeDL.getInstance().destroyProcessById(id)
-                    ffmpegProcesses[id]?.destroy()
                     writeStatus(dir, """{"status":"cancelled","percent":0}""")
                     log("Cancel requested for download $id")
                 }
@@ -532,7 +530,6 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         val dir = jobs.remove(jobId)
         jobRequests.remove(jobId)
         jobCookieRequests.remove(jobId)
-        ffmpegProcesses.remove(jobId)
         jobStates.remove(jobId)
         if (deleteFiles) dir?.deleteRecursively()
     }
