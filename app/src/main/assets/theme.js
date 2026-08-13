@@ -8,13 +8,27 @@
     style.id = "mdColorTheme";
     style.textContent = `
       :root{
-        --md-teal:#35c7b5;
-        --md-blue:#5aa9ff;
-        --md-orange:#ff9f43;
-        --md-purple:#a77bff;
-        --md-green:#55d68a;
-        --md-pink:#ff6f91;
-        --md-yellow:#ffd166;
+        --md-primary:#a8c7fa;
+        --md-on-primary:#0f1d33;
+
+        --md-secondary:#bec6dc;
+        --md-on-secondary:#283044;
+
+        --md-tertiary:#dfb8f5;
+        --md-on-tertiary:#3d234b;
+
+        --md-surface:#101318;
+        --md-surface-container:#1d2025;
+        --md-surface-container-high:#272a30;
+
+        --md-outline:#8e9099;
+        --md-outline-variant:#44474f;
+
+        --md-success:#a5d6a7;
+        --md-error:#ffb4ab;
+
+        --md-on-surface:#e2e2e9;
+        --md-on-surface-variant:#c4c6d0;
       }
 
       /* App name pill */
