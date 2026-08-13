@@ -16,10 +16,10 @@ jobs:
           fetch-depth: 0
       - name: Apply source patch
         env:
-          PATCH_B64: "c2tpcHBpbmc="
+          PATCH_B64: "CmltcG9ydCBiYXNlNjQK" 
         run: |
-          echo "$PATCH_B64" | base64 -d > /tmp/placeholder
-          python3 /tmp/placeholder
+          echo "$PATCH_B64" | base64 -d > /tmp/control_patch.py
+          python3 /tmp/control_patch.py
       - name: Remove temporary patch workflows
         run: |
           rm -f .github/workflows/patch-control-bridge.yml .github/workflows/repair-control-patch-runner.yml .github/workflows/apply-control-fix.yml
