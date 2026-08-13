@@ -1,0 +1,52 @@
+name: Fix control v2
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch download process control
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p = Path('app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt')
+          s = p.read_text()
+
+          old = '''            ensureEngine()\n            val stateBeforeStart = jobStates[jobId]\n            if (stateBeforeStart == "paused" || stateBeforeStart == "cancelled") {\n                log("Download $jobId start suppressed because state is $stateBeforeStart")\n                return\n            }\n            jobStates[jobId] = "running"\n            writeProgress(dir, "starting", 0.0, null, "Starting download…")'''
+          new = '''            val stateBeforeEngine = jobStates[jobId] ?: return\n            if (stateBeforeEngine != "running") {\n                log("Download $jobId start suppressed before engine init: state=$stateBeforeEngine")\n                return\n            }\n            ensureEngine()\n            if (jobStates[jobId] != "running") {\n                log("Download $jobId start suppressed after engine init: state=${jobStates[jobId]}")\n                return\n            }\n            writeProgress(dir, "starting", 0.0, null, "Starting download…")'''
+          if old not in s:
+              raise SystemExit('runJob start pattern not found')
+          s = s.replace(old, new, 1)
+
+          start = s.index('    private fun forceStopJobProcess(jobId: String) {')
+          end = s.index('    private fun controlDownload(id: String, action: String): Response {', start)
+          replacement = '''    private fun forceStopJobProcess(jobId: String) {\n        val jobDir = jobs[jobId]\n        val jobMarker = jobDir?.absolutePath ?: jobId\n        log("CONTROL: locating download processes for job=$jobId marker=$jobMarker")\n\n        try {\n            val appPid = android.os.Process.myPid()\n            val parentByPid = HashMap<Int, Int>()\n            val commandByPid = HashMap<Int, String>()\n            val exeByPid = HashMap<Int, String>()\n\n            for (entry in File("/proc").listFiles().orEmpty()) {\n                val pid = entry.name.toIntOrNull() ?: continue\n                if (pid == appPid) continue\n                try {\n                    val status = File(entry, "status").readText()\n                    val ppid = status.lineSequence()\n                        .firstOrNull { it.startsWith("PPid:") }\n                        ?.substringAfter(":")?.trim()?.toIntOrNull() ?: continue\n                    parentByPid[pid] = ppid\n                    val cmd = File(entry, "cmdline").readBytes()\n                        .toString(Charsets.UTF_8).replace('\\u0000', ' ').trim()\n                    commandByPid[pid] = cmd\n                    try { exeByPid[pid] = File(entry, "exe").canonicalPath } catch (_: Exception) {}\n                } catch (_: Exception) {}\n            }\n\n            val roots = commandByPid.keys.filter { pid ->\n                val cmd = commandByPid[pid].orEmpty()\n                val exe = exeByPid[pid].orEmpty()\n                cmd.contains(jobMarker, ignoreCase = true) ||\n                    cmd.contains("yt-dlp", ignoreCase = true) ||\n                    cmd.contains("libpython.so", ignoreCase = true) ||\n                    exe.contains("libpython.so", ignoreCase = true) ||\n                    exe.contains("yt-dlp", ignoreCase = true)\n            }.toSet()\n\n            fun belongsToRoot(pid: Int): Boolean {\n                var current = pid\n                val seen = HashSet<Int>()\n                while (seen.add(current) && current != appPid) {\n                    if (current in roots) return true\n                    current = parentByPid[current] ?: return false\n                }\n                return current in roots\n            }\n\n            val targets = (roots + parentByPid.keys.filter { belongsToRoot(it) })\n                .filter { it != appPid }\n                .distinct()\n                .sortedDescending()\n\n            log("CONTROL: found ${targets.size} candidate process(es) for job=$jobId")\n            for (pid in targets) {\n                val cmd = commandByPid[pid].orEmpty()\n                log("CONTROL: killing pid=$pid cmd=${cmd.take(240)}")\n                try {\n                    android.os.Process.sendSignal(pid, android.os.Process.SIGNAL_KILL)\n                } catch (e: Exception) {\n                    log("CONTROL: sendSignal failed for pid=$pid", e)\n                    try { android.os.Process.killProcess(pid) } catch (_: Exception) {}\n                }\n            }\n\n            // Also ask youtubedl-android to cancel its registered Process. Its public\n            // API is the canonical cancellation path; our /proc scan above covers\n            // child processes such as Python/FFmpeg that the library may miss.\n            try {\n                val stopped = YoutubeDL.getInstance().destroyProcessById(jobId)\n                log("CONTROL: youtubedl destroyProcessById($jobId)=$stopped")\n            } catch (e: Exception) {\n                log("CONTROL: youtubedl destroyProcessById failed for $jobId", e)\n            }\n        } catch (e: Exception) {\n            log("CONTROL: process scan failed for job=$jobId", e)\n        }\n    }\n\n'''
+          s = s[:start] + replacement + s[end:]
+
+          p.write_text(s)
+          print('patched LocalEngineServer.kt')
+
+      - name: Commit source patch and remove workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt .github/workflows/fix-control-v2.yml
+          git commit -m "Make pause terminate target actual yt-dlp process"
+          git push
+          git rm .github/workflows/fix-control-v2.yml
+          git commit -m "Remove temporary control fix workflow"
+          git push
