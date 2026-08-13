@@ -69,12 +69,23 @@
     const header = document.querySelector(".header");
     if (!header) return;
 
+    const settings = header.querySelector(".settings");
+    if (!settings) {
+      setTimeout(installManualLogButton, 250);
+      return;
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "md-header-actions";
+    actions.style.cssText = "display:flex;align-items:center;gap:8px;margin-left:auto;flex:0 0 auto";
+
     const button = document.createElement("button");
     button.id = "manualLogButton";
     button.type = "button";
-    button.textContent = "📄 Log";
+    button.textContent = "📄";
     button.title = "Generate diagnostic log now";
-    button.style.cssText = "margin-left:8px;padding:10px 13px;border:1px solid #35c7b5;border-radius:12px;background:#112421;color:#35c7b5;font-weight:800";
+    button.setAttribute("aria-label", "Generate diagnostic log");
+    button.style.cssText = "width:63px;height:63px;min-width:63px;padding:0;border:1px solid #35c7b5;border-radius:18px;background:#112421;color:#35c7b5;font-size:24px;font-weight:800;display:grid;place-items:center";
 
     button.onclick = () => {
       if (!window.Android || typeof window.Android.generateDiagnosticLog !== "function") {
@@ -83,13 +94,13 @@
       }
       button.disabled = true;
       button.dataset.oldText = button.textContent;
-      button.textContent = "⏳ Log…";
+      button.textContent = "⏳";
       window.onDiagnosticLogSaved = (ok) => {
-        button.textContent = ok ? "✅ Saved" : "❌ Failed";
+        button.textContent = ok ? "✓" : "✕";
         if (!ok) alert("Could not generate the diagnostic log. Check Android logcat.");
         setTimeout(() => {
           button.disabled = false;
-          button.textContent = button.dataset.oldText || "📄 Log";
+          button.textContent = button.dataset.oldText || "📄";
         }, 1800);
       };
       try {
@@ -97,12 +108,25 @@
       } catch (e) {
         console.error("Media Downloader: diagnostic log export failed", e);
         button.disabled = false;
-        button.textContent = button.dataset.oldText || "📄 Log";
+        button.textContent = button.dataset.oldText || "📄";
         alert(e.message || "Could not generate diagnostic log");
       }
     };
 
-    header.appendChild(button);
+    const style = document.createElement("style");
+    style.id = "mdManualLogButtonStyle";
+    style.textContent = `
+      #manualLogButton:active { transform:scale(.96); }
+      #manualLogButton:disabled { opacity:.7; }
+      @media(max-width:420px){
+        #manualLogButton { width:57px!important; height:57px!important; min-width:57px!important; border-radius:18px!important; }
+      }
+    `;
+    document.head.appendChild(style);
+
+    header.insertBefore(actions, settings);
+    actions.appendChild(button);
+    actions.appendChild(settings);
   }
 
   function watchForQualitySelector() {
