@@ -419,44 +419,126 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
     }
 
     private fun controlDownload(id: String, action: String): Response {
-        val dir = jobs[id] ?: return json(Response.Status.NOT_FOUND, """{"ok":false,"error":"Unknown job"}""")
-        val current = jobStates[id] ?: "unknown"
-        return try {
-            when (action) {
-                "pause" -> {
-                    if (current != "running") {
-                        return json(Response.Status.CONFLICT, """{"ok":false,"error":"Job is not running"}""")
-                    }
-                    jobStates[id] = "paused"
+    val dir = jobs[id]
+        ?: return json(
+            Response.Status.NOT_FOUND,
+            """{"ok":false,"error":"Unknown job"}"""
+        )
+
+    return try {
+        when (action.lowercase(Locale.US)) {
+
+            "pause" -> {
+                val current = jobStates[id] ?: "unknown"
+
+                if (current != "running") {
+                    return json(
+                        Response.Status.CONFLICT,
+                        """{"ok":false,"error":"Job is not running","status":"$current"}"""
+                    )
+                }
+
+                // Set the state BEFORE killing yt-dlp.
+                // This prevents runJob() from entering the retry path.
+                jobStates[id] = "paused"
+                log("Pause requested for download $id")
+
+                try {
                     YoutubeDL.getInstance().destroyProcessById(id)
-                    writeStatus(dir, """{"status":"paused","percent":${readPercent(dir)}}""")
-                    log("Pause requested for download $id")
+                } catch (e: Exception) {
+                    log("Pause process termination warning for $id", e)
                 }
-                "resume" -> {
-                    if (current != "paused") {
-                        return json(Response.Status.CONFLICT, """{"ok":false,"error":"Job is not paused"}""")
-                    }
-                    jobStates[id] = "running"
-                    writeStatus(dir, """{"status":"resuming","percent":${readPercent(dir)}}""")
-                    executor.execute { runJob(id) }
-                    log("Resume requested for download $id")
-                }
-                "cancel" -> {
-                    if (current == "completed" || current == "cancelled") {
-                        return json(Response.Status.CONFLICT, """{"ok":false,"error":"Job is already finished"}""")
-                    }
-                    jobStates[id] = "cancelled"
-                    YoutubeDL.getInstance().destroyProcessById(id)
-                    writeStatus(dir, """{"status":"cancelled","percent":0}""")
-                    log("Cancel requested for download $id")
-                }
+
+                writeStatus(
+                    dir,
+                    """{"status":"paused","percent":${readPercent(dir)}}"""
+                )
+
+                json(
+                    Response.Status.OK,
+                    """{"ok":true,"status":"paused"}"""
+                )
             }
-            json(Response.Status.OK, """{"ok":true,"status":"${jobStates[id] ?: current}"}""")
-        } catch (e: Exception) {
-            log("Download control FAILED for $id/$action", e)
-            json(Response.Status.INTERNAL_ERROR, """{"ok":false,"error":"${diagnostic(e).replace("\"", "'")}"}""")
+
+            "resume" -> {
+                val current = jobStates[id] ?: "unknown"
+
+                if (current != "paused") {
+                    return json(
+                        Response.Status.CONFLICT,
+                        """{"ok":false,"error":"Job is not paused","status":"$current"}"""
+                    )
+                }
+
+                jobStates[id] = "running"
+
+                writeStatus(
+                    dir,
+                    """{"status":"resuming","percent":${readPercent(dir)}}"""
+                )
+
+                log("Resume requested for download $id")
+
+                executor.execute {
+                    runJob(id)
+                }
+
+                json(
+                    Response.Status.OK,
+                    """{"ok":true,"status":"resuming"}"""
+                )
+            }
+
+            "cancel" -> {
+                val current = jobStates[id] ?: "unknown"
+
+                if (current == "completed" || current == "cancelled") {
+                    return json(
+                        Response.Status.CONFLICT,
+                        """{"ok":false,"error":"Job is already finished","status":"$current"}"""
+                    )
+                }
+
+                // IMPORTANT:
+                // Set cancelled BEFORE destroying yt-dlp.
+                // runJob() will then refuse to retry after the process is killed.
+                jobStates[id] = "cancelled"
+
+                log("Terminate requested for download $id")
+
+                try {
+                    YoutubeDL.getInstance().destroyProcessById(id)
+                } catch (e: Exception) {
+                    log("Terminate process warning for $id", e)
+                }
+
+                writeStatus(
+                    dir,
+                    """{"status":"cancelled","percent":0}"""
+                )
+
+                json(
+                    Response.Status.OK,
+                    """{"ok":true,"status":"cancelled"}"""
+                )
+            }
+
+            else -> {
+                json(
+                    Response.Status.BAD_REQUEST,
+                    """{"ok":false,"error":"Unknown control action: ${action.replace("\"", "'")}"}"""
+                )
+            }
         }
+    } catch (e: Exception) {
+        log("Download control FAILED for $id/$action", e)
+
+        json(
+            Response.Status.INTERNAL_ERROR,
+            """{"ok":false,"error":"${diagnostic(e).replace("\"", "'")}"}"""
+        )
     }
+}
 
     private fun saveToDownloads(source: File, displayName: String): Pair<String, String> {
         val treeUri = preferences.getString("download_tree_uri", null)
