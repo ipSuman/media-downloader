@@ -1,0 +1,35 @@
+name: Repair control patch runner
+
+on:
+  push:
+    branches: [fix-control-bridge]
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix-control-bridge
+          fetch-depth: 0
+      - name: Repair runner syntax
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/patch-control-bridge.yml')
+          s = p.read_text()
+          s = s.replace('        shell: python\n', '        shell: bash\n', 1)
+          s = s.replace('        run: |\n          from pathlib import Path\n\n', '        run: |\n          python3 - <<\'PY\'\n          from pathlib import Path\n\n', 1)
+          s = s.replace('          ls.write_text(s)\n\n      - name: Verify patch\n', '          ls.write_text(s)\n          PY\n\n      - name: Verify patch\n', 1)
+          p.write_text(s)
+          PY
+      - name: Commit repair and remove helper
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/repair-control-patch-runner.yml
+          git add .github/workflows/patch-control-bridge.yml
+          git commit -m "chore: repair control patch workflow"
+          git push origin fix-control-bridge
