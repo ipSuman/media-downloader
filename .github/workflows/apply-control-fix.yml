@@ -15,14 +15,13 @@ jobs:
           ref: fix-control-bridge
           fetch-depth: 0
       - name: Apply source patch
-        env:
-          PATCH_B64: "CmltcG9ydCBiYXNlNjQK" 
+        run: python3 scripts/apply_control_fix.py
+      - name: Remove temporary patch files
         run: |
-          echo "$PATCH_B64" | base64 -d > /tmp/control_patch.py
-          python3 /tmp/control_patch.py
-      - name: Remove temporary patch workflows
-        run: |
-          rm -f .github/workflows/patch-control-bridge.yml .github/workflows/repair-control-patch-runner.yml .github/workflows/apply-control-fix.yml
+          rm -f scripts/apply_control_fix.py
+          rm -f .github/workflows/patch-control-bridge.yml
+          rm -f .github/workflows/repair-control-patch-runner.yml
+          rm -f .github/workflows/apply-control-fix.yml
       - name: Verify
         run: |
           grep -q 'controlDownload(jobId: String, action: String, requestId: String)' app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt
@@ -32,6 +31,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/assets/download-fix.js app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt .github/workflows
+          git add app/src/main/assets/download-fix.js app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt .github/workflows scripts
           git commit -m "fix: make pause terminate use native control bridge"
           git push origin fix-control-bridge
