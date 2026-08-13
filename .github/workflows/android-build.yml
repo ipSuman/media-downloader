@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - fix-control-bridge
+      - material-you
   workflow_dispatch:
 
 permissions:
