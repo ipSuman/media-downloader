@@ -286,6 +286,11 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         val request = jobRequests[jobId] ?: return
         try {
             ensureEngine()
+            val stateBeforeStart = jobStates[jobId]
+            if (stateBeforeStart == "paused" || stateBeforeStart == "cancelled") {
+                log("Download $jobId start suppressed because state is $stateBeforeStart")
+                return
+            }
             jobStates[jobId] = "running"
             writeProgress(dir, "starting", 0.0, null, "Starting download…")
             try {
@@ -418,6 +423,68 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         }
     }
 
+    private fun forceStopJobProcess(jobId: String) {
+        var libraryStopped = false
+        try {
+            libraryStopped = YoutubeDL.getInstance().destroyProcessById(jobId)
+            log("yt-dlp library stop for $jobId: $libraryStopped")
+        } catch (e: Exception) {
+            log("yt-dlp library stop failed for $jobId", e)
+        }
+
+        try {
+            val rootPid = android.os.Process.myPid()
+            val parentByPid = HashMap<Int, Int>()
+            val commandByPid = HashMap<Int, String>()
+            for (entry in File("/proc").listFiles().orEmpty()) {
+                val pid = entry.name.toIntOrNull() ?: continue
+                try {
+                    val ppid = File(entry, "status").readLines()
+                        .firstOrNull { it.startsWith("PPid:") }
+                        ?.substringAfter(":")?.trim()?.toIntOrNull() ?: continue
+                    parentByPid[pid] = ppid
+                    val cmd = File(entry, "cmdline").readBytes()
+                        .toString(Charsets.UTF_8).replace('\u0000', ' ').trim()
+                    if (cmd.isNotEmpty()) commandByPid[pid] = cmd
+                } catch (_: Exception) { }
+            }
+
+            val roots = commandByPid.entries
+                .filter { (pid, cmd) ->
+                    pid != rootPid &&
+                        (cmd.contains("libpython.so", ignoreCase = true) ||
+                         cmd.contains("yt-dlp", ignoreCase = true))
+                }
+                .map { it.key }.toSet()
+
+            fun belongsToRoot(pid: Int): Boolean {
+                var current = pid
+                val seen = HashSet<Int>()
+                while (current != rootPid && seen.add(current)) {
+                    if (current in roots) return true
+                    current = parentByPid[current] ?: return false
+                }
+                return false
+            }
+
+            val targets = parentByPid.keys.filter { belongsToRoot(it) }
+                .sortedByDescending { it }
+            for (pid in targets) {
+                try {
+                    android.os.Process.killProcess(pid)
+                    log("Killed download process pid=$pid for job $jobId")
+                } catch (e: Exception) {
+                    log("Could not kill download process pid=$pid for job $jobId", e)
+                }
+            }
+            if (targets.isEmpty() && !libraryStopped) {
+                log("No yt-dlp process found for job $jobId")
+            }
+        } catch (e: Exception) {
+            log("Fallback process scan failed for job $jobId", e)
+        }
+    }
+
     private fun controlDownload(id: String, action: String): Response {
     val dir = jobs[id]
         ?: return json(
@@ -444,7 +511,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 log("Pause requested for download $id")
 
                 try {
-                    YoutubeDL.getInstance().destroyProcessById(id)
+                    forceStopJobProcess(id)
                 } catch (e: Exception) {
                     log("Pause process termination warning for $id", e)
                 }
@@ -507,7 +574,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 log("Terminate requested for download $id")
 
                 try {
-                    YoutubeDL.getInstance().destroyProcessById(id)
+                    forceStopJobProcess(id)
                 } catch (e: Exception) {
                     log("Terminate process warning for $id", e)
                 }
