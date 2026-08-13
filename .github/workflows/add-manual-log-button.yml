@@ -20,8 +20,10 @@ jobs:
           fetch-depth: 0
 
       - name: Patch manual diagnostic log endpoint and button
-        shell: python
+        shell: bash
         run: |
+          set -euo pipefail
+          python3 <<'PY'
           from pathlib import Path
 
           kt = Path('app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt')
@@ -77,10 +79,11 @@ jobs:
           if marker not in s:
               raise SystemExit('Expected JS insertion marker was not found; refusing to modify JS source.')
           s = s.replace(marker, insertion + marker, 1)
-          s = s.replace('  watchForQualitySelector();\n', '  watchForQualitySelector();\n  installManualLogButton();\n', 1)
+          if 'installManualLogButton();' not in s:
+              s = s.replace('  watchForQualitySelector();\n', '  watchForQualitySelector();\n  installManualLogButton();\n', 1)
           js.write_text(s)
-
           print('Manual diagnostic log patch applied.')
+          PY
 
       - name: Verify patch
         shell: bash
@@ -96,8 +99,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt app/src/main/assets/download-fix.js
-          git commit -m "Add manual diagnostic log button"
-          git push origin HEAD:main
+          if git diff --cached --quiet; then
+            echo "Patch already applied."
+          else
+            git commit -m "Add manual diagnostic log button"
+            git push origin HEAD:main
+          fi
 
       - name: Trigger Android build
         env:
@@ -106,9 +113,8 @@ jobs:
 
       - name: Remove temporary patch workflow
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
+          git pull --rebase origin main
           git rm .github/workflows/add-manual-log-button.yml
           git commit -m "Remove temporary log patch workflow"
           git push origin HEAD:main
