@@ -6,6 +6,7 @@
 
     const style = document.createElement("style");
     style.id = "mdColorTheme";
+
     style.textContent = `
       :root{
         --md-primary:#a8c7fa;
@@ -31,7 +32,59 @@
         --md-on-surface-variant:#c4c6d0;
       }
 
-      /* App name pill */
+      /* =========================================================
+         MATERIAL 3 GLOBAL SURFACES & TYPOGRAPHY
+         ========================================================= */
+
+      body{
+        background:var(--md-surface)!important;
+        color:var(--md-on-surface)!important;
+      }
+
+      .app{
+        color:var(--md-on-surface)!important;
+      }
+
+      .card{
+        background:var(--md-surface-container)!important;
+        border-color:var(--md-outline-variant)!important;
+        border-radius:20px!important;
+        box-shadow:none!important;
+      }
+
+      input,
+      select,
+      textarea{
+        background:var(--md-surface-container-high)!important;
+        color:var(--md-on-surface)!important;
+        border:1px solid var(--md-outline)!important;
+        border-radius:14px!important;
+      }
+
+      input:focus,
+      select:focus,
+      textarea:focus{
+        outline:none!important;
+        border-color:var(--md-primary)!important;
+        box-shadow:0 0 0 2px rgba(168,199,250,.18)!important;
+      }
+
+      label,
+      .hint,
+      .small,
+      .muted{
+        color:var(--md-on-surface-variant)!important;
+      }
+
+      .section-title{
+        color:var(--md-on-surface)!important;
+        font-weight:700;
+      }
+
+      /* =========================================================
+         APP NAME PILL
+         ========================================================= */
+
       .md-app-pill{
         display:flex;
         align-items:center;
@@ -41,16 +94,16 @@
         max-width:100%;
         margin:0 auto 14px;
         padding:7px 16px 7px 9px;
-        border:1px solid #4b5eb1;
+        border:1px solid var(--md-outline-variant);
         border-radius:999px;
-        background:linear-gradient(135deg,#101a32,#211d4b);
-        color:#f4f7ff;
+        background:var(--md-surface-container-high);
+        color:var(--md-on-surface);
         font-size:13px;
         font-weight:950;
         letter-spacing:1.2px;
         text-align:center;
-        box-shadow:0 5px 18px rgba(0,0,0,.25);
       }
+
       .md-app-pill img{
         width:32px;
         height:32px;
@@ -58,21 +111,51 @@
         flex:0 0 32px;
       }
 
-      /* Larger settings button: 1.5x from 42px to 63px */
+      /* =========================================================
+         SETTINGS BUTTON
+         ========================================================= */
+
       .settings{
         width:63px!important;
         height:63px!important;
         min-width:63px!important;
         border-radius:18px!important;
         font-size:30px!important;
-        border-color:#416b91!important;
-        background:#17283a!important;
-        color:var(--md-blue)!important;
-        box-shadow:0 5px 18px rgba(0,0,0,.25);
+        border:1px solid var(--md-outline)!important;
+        background:var(--md-surface-container-high)!important;
+        color:var(--md-primary)!important;
+        box-shadow:none!important;
       }
-      .settings:active{transform:scale(.96)}
 
-      /* Use the supplied SVG inside the app instead of the old down-arrow */
+      .settings:active{
+        transform:scale(.96);
+      }
+
+      /* =========================================================
+         DIAGNOSTIC LOG BUTTON
+         ========================================================= */
+
+      .md-log-button{
+        width:63px!important;
+        height:63px!important;
+        min-width:63px!important;
+        padding:0!important;
+        border-radius:18px!important;
+        border:1px solid var(--md-outline)!important;
+        background:var(--md-surface-container-high)!important;
+        color:var(--md-primary)!important;
+        font-size:28px!important;
+        box-shadow:none!important;
+      }
+
+      .md-log-button:active{
+        transform:scale(.96);
+      }
+
+      /* =========================================================
+         APP LOGO
+         ========================================================= */
+
       .logo-icon{
         width:46px!important;
         height:46px!important;
@@ -81,6 +164,7 @@
         border-radius:14px!important;
         overflow:hidden!important;
       }
+
       .logo-icon img{
         width:100%;
         height:100%;
@@ -88,13 +172,10 @@
         border-radius:14px;
       }
 
-      /* Colour-coded cards */
-      .md-url-card{border-color:#287c72!important;box-shadow:0 5px 22px rgba(53,199,181,.07)}
-      .md-media-card{border-color:#315f91!important;box-shadow:0 5px 22px rgba(90,169,255,.07)}
-      .md-queue-card{border-color:#69479b!important;box-shadow:0 5px 22px rgba(167,123,255,.07)}
-      .md-engine-card{border-color:#367b57!important;box-shadow:0 5px 22px rgba(85,214,138,.07)}
+      /* =========================================================
+         MATERIAL 3 CARDS
+         ========================================================= */
 
-      /* Material 3 surfaces */
       .md-url-card,
       .md-media-card,
       .md-queue-card,
@@ -112,13 +193,20 @@
         color:var(--md-on-surface)!important;
       }
 
-      /* Section colours */
-      .md-section-formats{color:var(--md-blue)!important}
-      .md-section-download{color:var(--md-orange)!important}
-      .md-section-options{color:var(--md-purple)!important}
+      /* =========================================================
+         SECTION TITLES
+         ========================================================= */
 
-      /* Buttons */
-      /* Material 3 buttons */
+      .md-section-formats,
+      .md-section-download,
+      .md-section-options{
+        color:var(--md-on-surface)!important;
+      }
+
+      /* =========================================================
+         MATERIAL 3 BUTTONS
+         ========================================================= */
+
       button,
       button.primary,
       .paste,
@@ -146,6 +234,7 @@
       }
 
       /* Primary */
+
       .primary,
       .md-download-button{
         border-color:var(--md-primary)!important;
@@ -154,6 +243,7 @@
       }
 
       /* Secondary / tonal */
+
       .paste,
       .md-analyze-button{
         border-color:var(--md-secondary)!important;
@@ -162,6 +252,7 @@
       }
 
       /* Segmented mode controls */
+
       .mode{
         background:transparent!important;
         color:var(--md-on-surface-variant)!important;
@@ -173,21 +264,26 @@
         color:var(--md-primary)!important;
       }
 
-      /* Pause / Resume */
+      /* =========================================================
+         PAUSE / RESUME / TERMINATE
+         ========================================================= */
+
       .md-download-controls .pause{
         border-color:var(--md-success)!important;
         background:rgba(165,214,167,.12)!important;
         color:var(--md-success)!important;
       }
 
-      /* Terminate */
       .md-download-controls .cancel{
         border-color:var(--md-error)!important;
         background:rgba(255,180,171,.12)!important;
         color:var(--md-error)!important;
       }
 
-      /* Material 3 time selector */
+      /* =========================================================
+         TIME SELECTOR
+         ========================================================= */
+
       .time-grid{
         padding:16px!important;
         border:1px solid var(--md-outline-variant)!important;
@@ -200,12 +296,15 @@
         font-weight:600;
       }
 
-      /* Material 3 cut-section control */
-        #cutSectionButton{
+      /* =========================================================
+         CUT SECTION
+         ========================================================= */
+
+      #cutSectionButton{
         border-color:var(--md-outline)!important;
         background:transparent!important;
         color:var(--md-on-surface)!important;
-       }
+      }
 
       #cutSectionToggle[data-state="on"]{
         border-color:var(--md-primary)!important;
@@ -213,73 +312,195 @@
         color:var(--md-primary)!important;
       }
 
+      /* =========================================================
+         CHECKBOXES
+         ========================================================= */
+
       .checks input{
         accent-color:var(--md-primary);
       }
 
-      .queue-item{border-color:#49356a!important;background:#211b2d!important}
-      .progress-bar{background:linear-gradient(90deg,var(--md-purple),var(--md-blue))!important}
-      .md-download-controls .pause{color:var(--md-green)!important;border-color:#367b57!important;background:#172b22!important}
-      .md-download-controls .cancel{color:#ff7777!important;border-color:#713838!important;background:#301d1d!important}
+      /* =========================================================
+         QUEUE
+         ========================================================= */
 
-      .md-settings{border-color:#416b91!important}
-      .md-settings-title{color:var(--md-blue)}
-      .md-folder{border-color:#426a91!important;background:#17283a!important}
-      #mdChooseFolder{background:var(--md-blue)!important;color:#07131f!important}
-      #mdResetFolder{border-color:#754f31!important;color:var(--md-orange)!important;background:#2b211b!important}
-      .md-close{color:var(--md-pink)!important;border-color:#713b4d!important}
+      .queue-item{
+        border:1px solid var(--md-outline-variant)!important;
+        background:var(--md-surface-container-high)!important;
+        border-radius:16px!important;
+      }
+
+      .progress-bar{
+        background:var(--md-primary)!important;
+      }
+
+      /* =========================================================
+         SETTINGS PANEL
+         ========================================================= */
+
+      .md-settings{
+        border:1px solid var(--md-outline-variant)!important;
+        background:var(--md-surface-container)!important;
+        border-radius:28px!important;
+        box-shadow:0 12px 32px rgba(0,0,0,.35)!important;
+      }
+
+      .md-settings-title{
+        color:var(--md-on-surface)!important;
+      }
+
+      .md-folder{
+        border:1px solid var(--md-outline)!important;
+        background:var(--md-surface-container-high)!important;
+        color:var(--md-on-surface)!important;
+        border-radius:16px!important;
+      }
+
+      #mdChooseFolder{
+        background:var(--md-primary)!important;
+        color:var(--md-on-primary)!important;
+        border-color:var(--md-primary)!important;
+      }
+
+      #mdResetFolder{
+        border-color:var(--md-outline)!important;
+        background:transparent!important;
+        color:var(--md-on-surface)!important;
+      }
+
+      .md-close{
+        border-color:var(--md-outline)!important;
+        background:transparent!important;
+        color:var(--md-on-surface)!important;
+      }
+
+      /* =========================================================
+         MOBILE
+         ========================================================= */
 
       @media(max-width:420px){
+
         .settings{
           width:57px!important;
           height:57px!important;
           min-width:57px!important;
           font-size:27px!important;
         }
+
+        .md-log-button{
+          width:57px!important;
+          height:57px!important;
+          min-width:57px!important;
+          font-size:25px!important;
+        }
       }
     `;
+
     document.head.appendChild(style);
 
     const app = document.querySelector(".app");
     if (!app) return;
 
+    /* =========================================================
+       APP NAME
+       ========================================================= */
+
     const pill = document.createElement("div");
     pill.className = "md-app-pill";
-    pill.innerHTML = `<img src="gemini-svg.svg" alt=""> <span>MEDIA DOWNLOADER</span>`;
+    pill.innerHTML =
+      `<img src="gemini-svg.svg" alt=""> <span>MEDIA DOWNLOADER</span>`;
+
     app.insertBefore(pill, app.firstChild);
 
+    /* =========================================================
+       LOGO
+       ========================================================= */
+
     const logoIcon = document.querySelector(".logo-icon");
+
     if (logoIcon) {
-      logoIcon.innerHTML = `<img src="gemini-svg.svg" alt="Media Downloader">`;
+      logoIcon.innerHTML =
+        `<img src="gemini-svg.svg" alt="Media Downloader">`;
     }
 
+    /* =========================================================
+       CARD CLASSIFICATION
+       ========================================================= */
+
     document.querySelectorAll(".app > .card").forEach(card => {
-      const title = card.querySelector(".card-title")?.textContent.trim().toLowerCase() || "";
-      if (title.includes("media url")) card.classList.add("md-url-card");
-      else if (card.id === "media") card.classList.add("md-media-card");
-      else if (card.querySelector("#queue")) card.classList.add("md-queue-card");
-      else if (title.includes("engine")) card.classList.add("md-engine-card");
+
+      const title =
+        card.querySelector(".card-title")?.textContent
+          .trim()
+          .toLowerCase() || "";
+
+      if (title.includes("media url")) {
+        card.classList.add("md-url-card");
+
+      } else if (card.id === "media") {
+        card.classList.add("md-media-card");
+
+      } else if (card.querySelector("#queue")) {
+        card.classList.add("md-queue-card");
+
+      } else if (title.includes("engine")) {
+        card.classList.add("md-engine-card");
+      }
     });
+
+    /* =========================================================
+       SECTION CLASSIFICATION
+       ========================================================= */
 
     document.querySelectorAll(".section-title").forEach(section => {
+
       const text = section.textContent.toLowerCase();
-      if (text.includes("available formats")) section.classList.add("md-section-formats");
-      if (text.includes("download section")) section.classList.add("md-section-download");
-      if (text.includes("options")) section.classList.add("md-section-options");
+
+      if (text.includes("available formats")) {
+        section.classList.add("md-section-formats");
+      }
+
+      if (text.includes("download section")) {
+        section.classList.add("md-section-download");
+      }
+
+      if (text.includes("options")) {
+        section.classList.add("md-section-options");
+      }
     });
 
+    /* =========================================================
+       PRIMARY BUTTON CLASSIFICATION
+       ========================================================= */
+
     document.querySelectorAll("button.primary").forEach(button => {
+
       const text = button.textContent.toLowerCase();
-      if (text.includes("analyze")) button.classList.add("md-analyze-button");
-      if (text.includes("download")) button.classList.add("md-download-button");
+
+      if (text.includes("analyze")) {
+        button.classList.add("md-analyze-button");
+      }
+
+      if (text.includes("download")) {
+        button.classList.add("md-download-button");
+      }
     });
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", installTheme, { once:true });
+
+    document.addEventListener(
+      "DOMContentLoaded",
+      installTheme,
+      { once:true }
+    );
+
   } else {
+
     installTheme();
   }
+
   setTimeout(installTheme, 100);
   setTimeout(installTheme, 600);
+
 })();
