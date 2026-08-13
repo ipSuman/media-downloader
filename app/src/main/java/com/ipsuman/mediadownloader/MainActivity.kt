@@ -321,6 +321,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun generateDiagnosticLog() {
+        try {
+            val source = File(filesDir, "media-downloader-engine.log")
+            val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
+            source.appendText("[$stamp] Manual diagnostic log requested from UI\n")
+
+            val fileStamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, "media-downloader-engine-$fileStamp.log")
+                put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+            }
+
+            val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("Could not create log file in Downloads")
+
+            contentResolver.openOutputStream(uri)?.use { out ->
+                source.inputStream().use { input -> input.copyTo(out) }
+            } ?: throw IllegalStateException("Could not open log output")
+
+            values.clear()
+            values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+
+            android.util.Log.d("MediaDownloader", "Diagnostic log exported: $uri")
+            webView.post {
+                webView.evaluateJavascript(
+                    "window.onDiagnosticLogSaved && window.onDiagnosticLogSaved(true);",
+                    null
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Could not generate diagnostic log", e)
+            webView.post {
+                webView.evaluateJavascript(
+                    "window.onDiagnosticLogSaved && window.onDiagnosticLogSaved(false);",
+                    null
+                )
+            }
+        }
+    }
+
     private inner class AndroidBridge {
         @JavascriptInterface fun chooseDownloadFolder() { runOnUiThread { openFolderPicker() } }
         @JavascriptInterface fun clearDownloadFolder() { runOnUiThread { clearSelectedFolder() } }
@@ -328,6 +371,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun chooseYoutubeCookies() { runOnUiThread { openYoutubeCookiesPicker() } }
         @JavascriptInterface fun clearYoutubeCookies() { runOnUiThread { this@MainActivity.clearYoutubeCookies() } }
         @JavascriptInterface fun hasYoutubeCookies(): Boolean = File(filesDir, "youtube-cookies.txt").isFile && File(filesDir, "youtube-cookies.txt").length() > 0L
+        @JavascriptInterface fun generateDiagnosticLog() { runOnUiThread { this@MainActivity.generateDiagnosticLog() } }
     }
 
     private object JSONObjectEscaper {

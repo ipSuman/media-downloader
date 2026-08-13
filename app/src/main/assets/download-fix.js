@@ -64,6 +64,47 @@
     row.appendChild(wrap);
   }
 
+  function installManualLogButton() {
+    if (byId("manualLogButton")) return;
+    const header = document.querySelector(".header");
+    if (!header) return;
+
+    const button = document.createElement("button");
+    button.id = "manualLogButton";
+    button.type = "button";
+    button.textContent = "📄 Log";
+    button.title = "Generate diagnostic log now";
+    button.style.cssText = "margin-left:8px;padding:10px 13px;border:1px solid #35c7b5;border-radius:12px;background:#112421;color:#35c7b5;font-weight:800";
+
+    button.onclick = () => {
+      if (!window.Android || typeof window.Android.generateDiagnosticLog !== "function") {
+        alert("Diagnostic log bridge is not available.");
+        return;
+      }
+      button.disabled = true;
+      button.dataset.oldText = button.textContent;
+      button.textContent = "⏳ Log…";
+      window.onDiagnosticLogSaved = (ok) => {
+        button.textContent = ok ? "✅ Saved" : "❌ Failed";
+        if (!ok) alert("Could not generate the diagnostic log. Check Android logcat.");
+        setTimeout(() => {
+          button.disabled = false;
+          button.textContent = button.dataset.oldText || "📄 Log";
+        }, 1800);
+      };
+      try {
+        window.Android.generateDiagnosticLog();
+      } catch (e) {
+        console.error("Media Downloader: diagnostic log export failed", e);
+        button.disabled = false;
+        button.textContent = button.dataset.oldText || "📄 Log";
+        alert(e.message || "Could not generate diagnostic log");
+      }
+    };
+
+    header.appendChild(button);
+  }
+
   function watchForQualitySelector() {
     installMergeToggle();
     const observer = new MutationObserver(installMergeToggle);
@@ -192,5 +233,6 @@
   };
 
   watchForQualitySelector();
+  installManualLogButton();
   console.log("Media Downloader: robust download bridge with merge toggle installed");
 })();
