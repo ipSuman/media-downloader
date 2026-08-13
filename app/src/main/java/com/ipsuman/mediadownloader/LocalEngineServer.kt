@@ -313,6 +313,12 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 val retryRequest = cookieRequest!!
                 addAuthenticationOptions(retryRequest)
                 log("PO Token and visitorData ready before cookie retry")
+                // The user may have paused/cancelled while authentication was being prepared.
+                // Never start the retry process after a control request has changed the state.
+                if (jobStates[jobId] != "retrying") {
+                    log("Cookie retry suppressed for $jobId: state=${jobStates[jobId]}")
+                    return
+                }
                 YoutubeDL.getInstance().execute(retryRequest, jobId) { progress, eta, line ->
                     val state = jobStates[jobId] ?: "running"
                     writeProgress(dir, state, progress.toDouble(), eta, line)
@@ -517,7 +523,9 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             "pause" -> {
                 val current = jobStates[id] ?: "unknown"
 
-                if (current != "running") {
+                // A YouTube cookie retry is still an active download. It must remain
+                // controllable while yt-dlp is between the first request and retry.
+                if (current != "running" && current != "retrying") {
                     return json(
                         Response.Status.CONFLICT,
                         """{"ok":false,"error":"Job is not running","status":"$current"}"""
@@ -714,6 +722,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                     val id = path.removePrefix("/download/").removeSuffix("/control").trim('/')
                     val files = HashMap<String, String>(); session.parseBody(files)
                     val action = JSONObject(files["postData"] ?: "{}").optString("action", "")
+                    log("CONTROL HTTP request received: job=$id action=$action")
                     controlDownload(id, action)
                 }
                 path.startsWith("/status/") -> {
