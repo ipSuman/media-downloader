@@ -228,6 +228,7 @@
         --text:#1a1b20;
         --muted:#5f6368;
         --border:#c5c7d0;
+        --md-log-button-bg:#ffffff;
 
         --md-surface:#f8f9ff;
         --md-surface-container:#eef0f7;
@@ -242,6 +243,12 @@
         --md-on-tertiary:#ffffff;
         --md-success:#2e7d32;
         --md-error:#ba1a1a;
+
+       #manualLogButton{
+        background:var(--md-log-button-bg)!important;
+        color:var(--md-primary)!important;
+        border-color:var(--md-primary)!important;
+       }
       }
 
       html.md-theme-light body{
