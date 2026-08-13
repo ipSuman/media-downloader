@@ -11,30 +11,20 @@
       :root{
         --md-primary:#a8c7fa;
         --md-on-primary:#0f1d33;
-
         --md-secondary:#bec6dc;
         --md-on-secondary:#283044;
-
         --md-tertiary:#dfb8f5;
         --md-on-tertiary:#3d234b;
-
         --md-surface:#101318;
         --md-surface-container:#1d2025;
         --md-surface-container-high:#272a30;
-
         --md-outline:#8e9099;
         --md-outline-variant:#44474f;
-
         --md-success:#a5d6a7;
         --md-error:#ffb4ab;
-
         --md-on-surface:#e2e2e9;
         --md-on-surface-variant:#c4c6d0;
       }
-
-      /* =========================================================
-         MATERIAL 3 GLOBAL SURFACES & TYPOGRAPHY
-         ========================================================= */
 
       body{
         background:var(--md-surface)!important;
@@ -81,10 +71,6 @@
         font-weight:700;
       }
 
-      /* =========================================================
-         APP NAME PILL
-         ========================================================= */
-
       .md-app-pill{
         display:flex;
         align-items:center;
@@ -111,10 +97,6 @@
         flex:0 0 32px;
       }
 
-      /* =========================================================
-         SETTINGS BUTTON
-         ========================================================= */
-
       .settings{
         width:63px!important;
         height:63px!important;
@@ -130,10 +112,6 @@
       .settings:active{
         transform:scale(.96);
       }
-
-      /* =========================================================
-         DIAGNOSTIC LOG BUTTON
-         ========================================================= */
 
       .md-log-button{
         width:63px!important;
@@ -152,10 +130,6 @@
         transform:scale(.96);
       }
 
-      /* =========================================================
-         APP LOGO
-         ========================================================= */
-
       .logo-icon{
         width:46px!important;
         height:46px!important;
@@ -171,10 +145,6 @@
         display:block;
         border-radius:14px;
       }
-
-      /* =========================================================
-         MATERIAL 3 CARDS
-         ========================================================= */
 
       .md-url-card,
       .md-media-card,
@@ -193,19 +163,11 @@
         color:var(--md-on-surface)!important;
       }
 
-      /* =========================================================
-         SECTION TITLES
-         ========================================================= */
-
       .md-section-formats,
       .md-section-download,
       .md-section-options{
         color:var(--md-on-surface)!important;
       }
-
-      /* =========================================================
-         MATERIAL 3 BUTTONS
-         ========================================================= */
 
       button,
       button.primary,
@@ -233,8 +195,6 @@
         opacity:.38!important;
       }
 
-      /* Primary */
-
       .primary,
       .md-download-button{
         border-color:var(--md-primary)!important;
@@ -242,16 +202,12 @@
         color:var(--md-on-primary)!important;
       }
 
-      /* Secondary / tonal */
-
       .paste,
       .md-analyze-button{
         border-color:var(--md-secondary)!important;
         background:var(--md-surface-container-high)!important;
         color:var(--md-on-surface)!important;
       }
-
-      /* Segmented mode controls */
 
       .mode{
         background:transparent!important;
@@ -263,10 +219,6 @@
         background:rgba(168,199,250,.16)!important;
         color:var(--md-primary)!important;
       }
-
-      /* =========================================================
-         PAUSE / RESUME / TERMINATE
-         ========================================================= */
 
       .md-download-controls .pause{
         border-color:var(--md-success)!important;
@@ -280,10 +232,6 @@
         color:var(--md-error)!important;
       }
 
-      /* =========================================================
-         TIME SELECTOR
-         ========================================================= */
-
       .time-grid{
         padding:16px!important;
         border:1px solid var(--md-outline-variant)!important;
@@ -295,10 +243,6 @@
         color:var(--md-on-surface-variant)!important;
         font-weight:600;
       }
-
-      /* =========================================================
-         CUT SECTION
-         ========================================================= */
 
       #cutSectionButton{
         border-color:var(--md-outline)!important;
@@ -312,17 +256,9 @@
         color:var(--md-primary)!important;
       }
 
-      /* =========================================================
-         CHECKBOXES
-         ========================================================= */
-
       .checks input{
         accent-color:var(--md-primary);
       }
-
-      /* =========================================================
-         QUEUE
-         ========================================================= */
 
       .queue-item{
         border:1px solid var(--md-outline-variant)!important;
@@ -333,10 +269,6 @@
       .progress-bar{
         background:var(--md-primary)!important;
       }
-
-      /* =========================================================
-         SETTINGS PANEL
-         ========================================================= */
 
       .md-settings{
         border:1px solid var(--md-outline-variant)!important;
@@ -375,11 +307,71 @@
       }
 
       /* =========================================================
-         MOBILE
+         MATERIAL 3 REFINEMENTS
          ========================================================= */
 
-      @media(max-width:420px){
+      button:hover,
+      .settings:hover,
+      .md-log-button:hover,
+      .md-close:hover{
+        border-color:var(--md-primary)!important;
+      }
 
+      .primary:hover,
+      .md-download-button:hover,
+      #mdChooseFolder:hover{
+        filter:brightness(1.04);
+      }
+
+      button:focus-visible,
+      .settings:focus-visible,
+      .md-log-button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible{
+        outline:2px solid var(--md-primary)!important;
+        outline-offset:2px!important;
+      }
+
+      .md-settings{
+        transition:transform .22s ease,opacity .22s ease;
+      }
+
+      .md-settings button,
+      .md-settings input,
+      .md-settings select{
+        font-size:15px;
+      }
+
+      ::-webkit-scrollbar{
+        width:8px;
+        height:8px;
+      }
+
+      ::-webkit-scrollbar-track{
+        background:transparent;
+      }
+
+      ::-webkit-scrollbar-thumb{
+        background:var(--md-outline-variant);
+        border-radius:999px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover{
+        background:var(--md-outline);
+      }
+
+      @media(prefers-reduced-motion:reduce){
+        *,
+        *::before,
+        *::after{
+          scroll-behavior:auto!important;
+          transition:none!important;
+          animation:none!important;
+        }
+      }
+
+      @media(max-width:420px){
         .settings{
           width:57px!important;
           height:57px!important;
@@ -401,20 +393,12 @@
     const app = document.querySelector(".app");
     if (!app) return;
 
-    /* =========================================================
-       APP NAME
-       ========================================================= */
-
     const pill = document.createElement("div");
     pill.className = "md-app-pill";
     pill.innerHTML =
       `<img src="gemini-svg.svg" alt=""> <span>MEDIA DOWNLOADER</span>`;
 
     app.insertBefore(pill, app.firstChild);
-
-    /* =========================================================
-       LOGO
-       ========================================================= */
 
     const logoIcon = document.querySelector(".logo-icon");
 
@@ -423,12 +407,7 @@
         `<img src="gemini-svg.svg" alt="Media Downloader">`;
     }
 
-    /* =========================================================
-       CARD CLASSIFICATION
-       ========================================================= */
-
     document.querySelectorAll(".app > .card").forEach(card => {
-
       const title =
         card.querySelector(".card-title")?.textContent
           .trim()
@@ -436,24 +415,16 @@
 
       if (title.includes("media url")) {
         card.classList.add("md-url-card");
-
       } else if (card.id === "media") {
         card.classList.add("md-media-card");
-
       } else if (card.querySelector("#queue")) {
         card.classList.add("md-queue-card");
-
       } else if (title.includes("engine")) {
         card.classList.add("md-engine-card");
       }
     });
 
-    /* =========================================================
-       SECTION CLASSIFICATION
-       ========================================================= */
-
     document.querySelectorAll(".section-title").forEach(section => {
-
       const text = section.textContent.toLowerCase();
 
       if (text.includes("available formats")) {
@@ -469,12 +440,7 @@
       }
     });
 
-    /* =========================================================
-       PRIMARY BUTTON CLASSIFICATION
-       ========================================================= */
-
     document.querySelectorAll("button.primary").forEach(button => {
-
       const text = button.textContent.toLowerCase();
 
       if (text.includes("analyze")) {
@@ -488,15 +454,12 @@
   }
 
   if (document.readyState === "loading") {
-
     document.addEventListener(
       "DOMContentLoaded",
       installTheme,
       { once:true }
     );
-
   } else {
-
     installTheme();
   }
 
