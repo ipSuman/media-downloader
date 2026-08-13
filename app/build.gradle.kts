@@ -62,9 +62,6 @@ val copyWebApp by tasks.registering(Copy::class) {
     into(layout.buildDirectory.dir("generated/assets"))
 }
 
-// The bundled FFmpeg package contains librubberband.so, which is linked
-// against Android's libc++ shared runtime. Copy the matching runtime from
-// the configured Android NDK into the APK's native libraries.
 val copyLibcxxShared by tasks.registering(Copy::class) {
     val ndkRoot = android.ndkDirectory
     from(File(ndkRoot, "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"))
@@ -73,25 +70,32 @@ val copyLibcxxShared by tasks.registering(Copy::class) {
 
 android.applicationVariants.all {
     val variantName = name.replaceFirstChar { it.uppercase() }
+
     tasks.named("merge${variantName}Assets").configure {
         dependsOn(copyWebApp)
     }
+
     tasks.named("merge${variantName}JniLibFolders").configure {
         dependsOn(copyLibcxxShared)
+    }
+
+    // Release lint also reads generated assets. Declare the dependency
+    // explicitly so Gradle 8.7 does not reject the build for task ordering.
+    tasks.matching {
+        it.name == "generate${variantName}LintVitalReportModel" ||
+            it.name == "lintVitalAnalyze${variantName}"
+    }.configureEach {
+        dependsOn(copyWebApp)
     }
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("androidx.documentfile:documentfile:1.1.0")
-
-    // Embedded local HTTP server
     implementation("org.nanohttpd:nanohttpd:2.3.1")
-
-    // Android yt-dlp engine + bundled FFmpeg.
-    // This library provides its own Python runtime; do not combine it with Chaquopy.
     implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 }
