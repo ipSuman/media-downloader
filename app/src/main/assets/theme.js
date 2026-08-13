@@ -222,6 +222,13 @@
       }
 
       html.md-theme-light{
+        --bg:#f8f9ff;
+        --card:#ffffff;
+        --card2:#eef0f7;
+        --text:#1a1b20;
+        --muted:#5f6368;
+        --border:#c5c7d0;
+
         --md-surface:#f8f9ff;
         --md-surface-container:#eef0f7;
         --md-surface-container-high:#e4e7ef;
