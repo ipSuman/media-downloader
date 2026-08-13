@@ -1,0 +1,68 @@
+name: Apply Manual Diagnostic Log Button
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source patch
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          main = Path('app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt')
+          s = main.read_text()
+
+          marker = '''    private inner class AndroidBridge {\n'''
+          method = '''    private fun generateDiagnosticLog() {\n        try {\n            val source = File(filesDir, "media-downloader-engine.log")\n            val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())\n            source.appendText("[$stamp] Manual diagnostic log requested from UI\\n")\n\n            val fileStamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())\n            val values = android.content.ContentValues().apply {\n                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, "media-downloader-engine-$fileStamp.log")\n                put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain")\n                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)\n                put(android.provider.MediaStore.Downloads.IS_PENDING, 1)\n            }\n\n            val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)\n                ?: throw IllegalStateException("Could not create log file in Downloads")\n\n            contentResolver.openOutputStream(uri)?.use { out ->\n                source.inputStream().use { input -> input.copyTo(out) }\n            } ?: throw IllegalStateException("Could not open log output")\n\n            values.clear()\n            values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)\n            contentResolver.update(uri, values, null, null)\n\n            android.util.Log.d("MediaDownloader", "Diagnostic log exported: $uri")\n            webView.post {\n                webView.evaluateJavascript(\n                    "window.onDiagnosticLogSaved && window.onDiagnosticLogSaved(true);",\n                    null\n                )\n            }\n        } catch (e: Exception) {\n            android.util.Log.e("MediaDownloader", "Could not generate diagnostic log", e)\n            webView.post {\n                webView.evaluateJavascript(\n                    "window.onDiagnosticLogSaved && window.onDiagnosticLogSaved(false);",\n                    null\n                )\n            }\n        }\n    }\n\n'''
+          if 'private fun generateDiagnosticLog()' not in s:
+              if marker not in s:
+                  raise SystemExit('AndroidBridge marker not found')
+              s = s.replace(marker, method + marker, 1)
+
+          old = '''        @JavascriptInterface fun hasYoutubeCookies(): Boolean = File(filesDir, "youtube-cookies.txt").isFile && File(filesDir, "youtube-cookies.txt").length() > 0L\n'''
+          new = old + '''        @JavascriptInterface fun generateDiagnosticLog() { runOnUiThread { this@MainActivity.generateDiagnosticLog() } }\n'''
+          if 'fun generateDiagnosticLog()' not in s[s.find('private inner class AndroidBridge'):]:
+              if old not in s:
+                  raise SystemExit('AndroidBridge insertion point not found')
+              s = s.replace(old, new, 1)
+          main.write_text(s)
+
+          js = Path('app/src/main/assets/download-fix.js')
+          s = js.read_text()
+          marker = '  function watchForQualitySelector() {\n'
+          insertion = '''  function installManualLogButton() {\n    if (byId("manualLogButton")) return;\n    const header = document.querySelector(".header");\n    if (!header) return;\n\n    const button = document.createElement("button");\n    button.id = "manualLogButton";\n    button.type = "button";\n    button.textContent = "📄 Log";\n    button.title = "Generate diagnostic log now";\n    button.style.cssText = "margin-left:8px;padding:10px 13px;border:1px solid #35c7b5;border-radius:12px;background:#112421;color:#35c7b5;font-weight:800";\n\n    button.onclick = () => {\n      if (!window.Android || typeof window.Android.generateDiagnosticLog !== "function") {\n        alert("Diagnostic log bridge is not available.");\n        return;\n      }\n      button.disabled = true;\n      button.dataset.oldText = button.textContent;\n      button.textContent = "⏳ Log…";\n      window.onDiagnosticLogSaved = (ok) => {\n        button.textContent = ok ? "✅ Saved" : "❌ Failed";\n        if (!ok) alert("Could not generate the diagnostic log. Check Android logcat.");\n        setTimeout(() => {\n          button.disabled = false;\n          button.textContent = button.dataset.oldText || "📄 Log";\n        }, 1800);\n      };\n      try {\n        window.Android.generateDiagnosticLog();\n      } catch (e) {\n        console.error("Media Downloader: diagnostic log export failed", e);\n        button.disabled = false;\n        button.textContent = button.dataset.oldText || "📄 Log";\n        alert(e.message || "Could not generate diagnostic log");\n      }\n    };\n\n    header.appendChild(button);\n  }\n\n'''
+          if marker not in s:
+              raise SystemExit('JS insertion marker not found')
+          if 'manualLogButton' not in s:
+              s = s.replace(marker, insertion + marker, 1)
+          s = s.replace('  watchForQualitySelector();\n', '  watchForQualitySelector();\n  installManualLogButton();\n', 1)
+          js.write_text(s)
+          print('Patch applied successfully')
+          PY
+
+      - name: Verify source patch
+        run: |
+          grep -n 'generateDiagnosticLog' app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt
+          grep -n 'manualLogButton' app/src/main/assets/download-fix.js
+
+      - name: Commit patched source and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-manual-log-button.yml
+          git add app/src/main/java/com/ipsuman/mediadownloader/MainActivity.kt app/src/main/assets/download-fix.js
+          git commit -m "Add manual diagnostic log button"
+          git push origin HEAD:main
