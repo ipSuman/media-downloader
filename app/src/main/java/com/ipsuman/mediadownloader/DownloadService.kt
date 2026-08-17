@@ -13,15 +13,13 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Keeps the local engine alive independently of MainActivity/WebView. */
+/** Keeps the local engine process protected by a foreground service. */
 class DownloadService : Service() {
     companion object {
         private const val CHANNEL_ID = "downloads"
         private const val NOTIFICATION_ID = 4100
         @Volatile var instance: DownloadService? = null
     }
-
-    private var engineServer: LocalEngineServer? = null
     private lateinit var logFile: java.io.File
 
     override fun onCreate() {
@@ -30,7 +28,7 @@ class DownloadService : Service() {
         logFile = java.io.File(filesDir, "media-downloader-engine.log")
         log("BACKGROUND: DownloadService.onCreate()")
         createNotificationChannel()
-        val notification = buildNotification("Engine starting…", 0, false)
+        val notification = buildNotification("Background engine active", 0, false)
         log("NOTIFICATION: calling startForeground(id=$NOTIFICATION_ID)")
         try {
             startForeground(NOTIFICATION_ID, notification)
@@ -39,15 +37,6 @@ class DownloadService : Service() {
             log("NOTIFICATION: startForeground() FAILED", e)
             throw e
         }
-        try {
-            engineServer = LocalEngineServer(applicationContext) { jobId, state, percent, title ->
-                updateDownloadNotification(jobId, state, percent, title)
-            }
-            engineServer?.start()
-            log("BACKGROUND: LocalEngineServer started; alive=${engineServer?.isAlive}")
-        } catch (e: Exception) {
-            log("BACKGROUND: LocalEngineServer start FAILED", e)
-        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -55,13 +44,11 @@ class DownloadService : Service() {
         return START_STICKY
     }
 
-    fun updateDownloadNotification(jobId: String, state: String, percent: Int, title: String?) {
+    fun postDownloadStatus(jobId: String, text: String, percent: Int = 0, completed: Boolean = false) {
         val manager = getSystemService(NotificationManager::class.java)
-        val safePercent = percent.coerceIn(0, 100)
-        val text = title?.takeIf { it.isNotBlank() } ?: state
-        log("NOTIFICATION: posting job=$jobId state=$state percent=$safePercent text=${text.take(180)}")
+        log("NOTIFICATION: posting job=$jobId percent=${percent.coerceIn(0,100)} text=${text.take(180)}")
         try {
-            manager.notify(NOTIFICATION_ID, buildNotification(text, safePercent, state == "completed"))
+            manager.notify(NOTIFICATION_ID, buildNotification(text, percent, completed))
             log("NOTIFICATION: posted job=$jobId")
         } catch (e: Exception) {
             log("NOTIFICATION: post FAILED for job=$jobId", e)
@@ -81,11 +68,11 @@ class DownloadService : Service() {
     }
 
     private fun buildNotification(text: String, percent: Int, completed: Boolean): Notification {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
         val pending = PendingIntent.getActivity(
-            this, 4101, intent,
+            this, 4101,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -97,7 +84,7 @@ class DownloadService : Service() {
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-        if (!completed) builder.setProgress(100, percent, false)
+        if (!completed) builder.setProgress(100, percent.coerceIn(0,100), false)
         return builder.build()
     }
 
@@ -111,12 +98,9 @@ class DownloadService : Service() {
     }
 
     override fun onDestroy() {
-        log("BACKGROUND: DownloadService.onDestroy(); stopping engine server")
-        try { engineServer?.stop() } catch (e: Exception) { log("BACKGROUND: server stop failed", e) }
-        engineServer = null
+        log("BACKGROUND: DownloadService.onDestroy()")
         instance = null
         super.onDestroy()
     }
-
     override fun onBind(intent: Intent?): IBinder? = null
 }
