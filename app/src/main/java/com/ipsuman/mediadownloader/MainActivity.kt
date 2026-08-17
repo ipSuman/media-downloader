@@ -1,8 +1,11 @@
 package com.ipsuman.mediadownloader
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.webkit.JavascriptInterface
@@ -23,11 +26,13 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("media_downloader", MODE_PRIVATE) }
     private val folderPickerRequestCode = 4101
     private val cookiesPickerRequestCode = 4102
+    private val notificationPermissionRequestCode = 7101
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        requestNotificationPermission()
         updateYtdlpConfig()
         startLocalEngine()
 
@@ -55,9 +60,17 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl("file:///android_asset/index.html")
     }
 
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), notificationPermissionRequestCode)
+        }
+    }
+
     private fun startLocalEngine() {
         try {
-            if (engineServer == null) engineServer = LocalEngineServer(this)
+            if (EngineHolder.server == null) EngineHolder.server = LocalEngineServer(this)
+            engineServer = EngineHolder.server
             if (engineServer?.isAlive == true) return
             android.util.Log.d("MediaDownloader", "Starting local engine on 127.0.0.1:8765")
             engineServer?.start()
@@ -65,7 +78,8 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             android.util.Log.e("MediaDownloader", "Local engine failed to start", e)
             try { engineServer?.stop() } catch (_: Exception) {}
-            engineServer = LocalEngineServer(this)
+            EngineHolder.server = LocalEngineServer(this)
+            engineServer = EngineHolder.server
             try {
                 engineServer?.start()
                 android.util.Log.d("MediaDownloader", "Local engine retry; alive=${engineServer?.isAlive}")
@@ -150,6 +164,35 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun injectNotificationBridge() {
+        webView.evaluateJavascript(
+            """
+            (function(){
+              function install(){
+                if(window.__mdNotificationHookInstalled) return true;
+                if(typeof window.monitorDownload !== 'function') return false;
+                var original = window.monitorDownload;
+                window.monitorDownload = function(jobId, item){
+                  try{
+                    var label = item && item.querySelector ? (item.querySelector('.queue-name')?.textContent || 'Media download') : 'Media download';
+                    if(window.Android && typeof window.Android.startDownloadNotification === 'function'){
+                      window.Android.startDownloadNotification(String(jobId), String(label));
+                    }
+                  }catch(e){ console.log('Notification bridge failed',e); }
+                  return original.apply(this, arguments);
+                };
+                window.__mdNotificationHookInstalled=true;
+                return true;
+              }
+              if(!install()) setTimeout(install,100);
+              if(!install()) setTimeout(install,500);
+              if(!install()) setTimeout(install,1200);
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
     private fun injectSelectionBridge() {
         try {
             val scripts = listOf("api-compat.js", "theme.js", "selection-bridge.js", "cut-keyboard-fix.js", "download-fix.js")
@@ -157,6 +200,7 @@ class MainActivity : AppCompatActivity() {
                 val script = assets.open(scriptName).bufferedReader(Charsets.UTF_8).use { it.readText() }
                 webView.evaluateJavascript(script, null)
             }
+            injectNotificationBridge()
         } catch (e: Exception) {
             android.util.Log.e("MediaDownloader", "Could not inject WebView bridge/theme", e)
         }
@@ -419,6 +463,14 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
+    private fun startDownloadNotification(jobId: String, title: String) {
+        try {
+            DownloadNotificationService.start(this, jobId, title)
+        } catch (e: Exception) {
+            android.util.Log.e("MediaDownloader", "Could not start download notification service", e)
+        }
+    }
+
     private inner class AndroidBridge {
         @JavascriptInterface fun chooseDownloadFolder() { runOnUiThread { openFolderPicker() } }
         @JavascriptInterface fun clearDownloadFolder() { runOnUiThread { clearSelectedFolder() } }
@@ -428,6 +480,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun hasYoutubeCookies(): Boolean = File(filesDir, "youtube-cookies.txt").isFile && File(filesDir, "youtube-cookies.txt").length() > 0L
         @JavascriptInterface fun generateDiagnosticLog() { runOnUiThread { this@MainActivity.generateDiagnosticLog() } }
         @JavascriptInterface fun controlDownload(jobId: String, action: String, requestId: String) { nativeControlDownload(jobId, action, requestId) }
+        @JavascriptInterface fun startDownloadNotification(jobId: String, title: String) { startDownloadNotification(jobId, title) }
     }
 
     private object JSONObjectEscaper {
@@ -441,7 +494,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        engineServer?.stop()
+        if (!DownloadNotificationService.isRunning) {
+            try { engineServer?.stop() } catch (_: Exception) {}
+            if (EngineHolder.server === engineServer) EngineHolder.server = null
+        }
         engineServer = null
         super.onDestroy()
     }
