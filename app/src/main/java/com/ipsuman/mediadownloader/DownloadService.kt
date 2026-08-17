@@ -9,23 +9,31 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
-/** Keeps the local engine process protected by a foreground service. */
+/** Keeps the local engine process protected by a foreground service and watches download jobs. */
 class DownloadService : Service() {
     companion object {
         private const val CHANNEL_ID = "downloads"
         private const val NOTIFICATION_ID = 4100
         @Volatile var instance: DownloadService? = null
     }
-    private lateinit var logFile: java.io.File
+
+    private lateinit var logFile: File
+    private var watcher: ScheduledExecutorService? = null
+    private val lastStatus = HashMap<String, String>()
 
     override fun onCreate() {
         super.onCreate()
         instance = this
-        logFile = java.io.File(filesDir, "media-downloader-engine.log")
+        logFile = File(filesDir, "media-downloader-engine.log")
         log("BACKGROUND: DownloadService.onCreate()")
         createNotificationChannel()
         val notification = buildNotification("Background engine active", 0, false)
@@ -37,11 +45,42 @@ class DownloadService : Service() {
             log("NOTIFICATION: startForeground() FAILED", e)
             throw e
         }
+        startDownloadWatcher()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         log("BACKGROUND: onStartCommand(startId=$startId, action=${intent?.action ?: "null"})")
         return START_STICKY
+    }
+
+    private fun startDownloadWatcher() {
+        log("BACKGROUND: starting download-job watcher")
+        watcher = Executors.newSingleThreadScheduledExecutor()
+        watcher?.scheduleWithFixedDelay({ scanDownloadJobs() }, 0, 1, TimeUnit.SECONDS)
+        log("BACKGROUND: download-job watcher requested")
+    }
+
+    private fun scanDownloadJobs() {
+        try {
+            val root = File(filesDir, "media-downloads")
+            if (!root.isDirectory) return
+            for (jobDir in root.listFiles().orEmpty()) {
+                if (!jobDir.isDirectory) continue
+                val statusFile = File(jobDir, "android_status.json")
+                if (!statusFile.isFile) continue
+                val raw = statusFile.readText()
+                if (raw == lastStatus[jobDir.name]) continue
+                lastStatus[jobDir.name] = raw
+                val json = try { JSONObject(raw) } catch (_: Exception) { continue }
+                val state = json.optString("status", "unknown")
+                val percent = json.optInt("percent", 0).coerceIn(0, 100)
+                val message = json.optString("message", "").ifBlank { state }
+                log("BACKGROUND: download job detected job=${jobDir.name} state=$state percent=$percent")
+                postDownloadStatus(jobDir.name, message, percent, state == "completed")
+            }
+        } catch (e: Exception) {
+            log("BACKGROUND: download-job watcher scan FAILED", e)
+        }
     }
 
     fun postDownloadStatus(jobId: String, text: String, percent: Int = 0, completed: Boolean = false) {
@@ -99,6 +138,8 @@ class DownloadService : Service() {
 
     override fun onDestroy() {
         log("BACKGROUND: DownloadService.onDestroy()")
+        try { watcher?.shutdownNow() } catch (_: Exception) {}
+        watcher = null
         instance = null
         super.onDestroy()
     }
