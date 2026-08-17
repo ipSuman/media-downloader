@@ -33,7 +33,8 @@ class DownloadNotificationService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(
+        ServiceCompat.startForeground(
+            this,
             FOREGROUND_ID,
             foregroundNotification("Preparing download…"),
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
