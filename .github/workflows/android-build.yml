@@ -6,6 +6,7 @@ on:
       - main
       - fix-control-bridge
       - material-you
+      - engine-auth-fix
   workflow_dispatch:
 
 permissions:
@@ -61,19 +62,10 @@ jobs:
           APK="app/build/outputs/apk/release/app-release-unsigned.apk"
           SIGNED_APK="app/build/outputs/apk/release/MediaDownloader-v0.2.0.apk"
           APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-
-          "$APKSIGNER" sign \
-            --ks "$RUNNER_TEMP/media-downloader-release.jks" \
-            --ks-key-alias media-downloader \
-            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
-            --key-pass env:ANDROID_KEY_PASSWORD \
-            --out "$SIGNED_APK" \
-            "$APK"
-
+          "$APKSIGNER" sign --ks "$RUNNER_TEMP/media-downloader-release.jks" --ks-key-alias media-downloader --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEY_PASSWORD --out "$SIGNED_APK" "$APK"
           "$APKSIGNER" verify --verbose "$SIGNED_APK"
           test -s "$SIGNED_APK"
-          rm -f "$APK"
-          rm -f "$RUNNER_TEMP/media-downloader-release.jks"
+          rm -f "$APK" "$RUNNER_TEMP/media-downloader-release.jks"
 
       - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
