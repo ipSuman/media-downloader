@@ -480,7 +480,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun hasYoutubeCookies(): Boolean = File(filesDir, "youtube-cookies.txt").isFile && File(filesDir, "youtube-cookies.txt").length() > 0L
         @JavascriptInterface fun generateDiagnosticLog() { runOnUiThread { this@MainActivity.generateDiagnosticLog() } }
         @JavascriptInterface fun controlDownload(jobId: String, action: String, requestId: String) { nativeControlDownload(jobId, action, requestId) }
-        @JavascriptInterface fun startDownloadNotification(jobId: String, title: String) { startDownloadNotification(jobId, title) }
+        @JavascriptInterface fun startDownloadNotification(jobId: String, title: String) { this@MainActivity.startDownloadNotification(jobId, title) }
     }
 
     private object JSONObjectEscaper {
