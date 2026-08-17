@@ -6,6 +6,7 @@ on:
       - main
       - fix-control-bridge
       - material-you
+      - v0.3-notifications
   workflow_dispatch:
 
 permissions:
