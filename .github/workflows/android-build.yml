@@ -60,7 +60,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           APK="app/build/outputs/apk/release/app-release-unsigned.apk"
-          SIGNED_APK="app/build/outputs/apk/release/MediaDownloader-v0.2.0.apk"
+          SIGNED_APK="app/build/outputs/apk/release/MediaDownloader-v0.3-dev.apk"
           APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
 
           "$APKSIGNER" sign \
@@ -76,9 +76,9 @@ jobs:
           rm -f "$APK"
           rm -f "$RUNNER_TEMP/media-downloader-release.jks"
 
-      - name: Upload Signed Release APK
+      - name: Upload Signed v0.3 Development APK
         uses: actions/upload-artifact@v4
         with:
-          name: MediaDownloader-release-v0.2.0
-          path: app/build/outputs/apk/release/MediaDownloader-v0.2.0.apk
+          name: MediaDownloader-v0.3-dev-signed
+          path: app/build/outputs/apk/release/MediaDownloader-v0.3-dev.apk
           if-no-files-found: error
