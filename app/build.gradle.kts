@@ -20,7 +20,7 @@ android {
         targetSdk = 35
         val ciIteration = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
         versionCode = ciIteration ?: 2
-        versionName = "0.2.0"
+        versionName = "0.3.0"
         ndk {
           abiFilters += listOf("arm64-v8a")
         }
