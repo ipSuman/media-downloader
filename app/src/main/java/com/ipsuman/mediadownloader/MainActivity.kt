@@ -69,7 +69,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startLocalEngine() {
         try {
-            if (EngineHolder.server == null) EngineHolder.server = LocalEngineServer(this)
+            if (EngineHolder.server == null) EngineHolder.server = LocalEngineServer(applicationContext)
             engineServer = EngineHolder.server
             if (engineServer?.isAlive == true) return
             android.util.Log.d("MediaDownloader", "Starting local engine on 127.0.0.1:8765")
@@ -78,7 +78,7 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             android.util.Log.e("MediaDownloader", "Local engine failed to start", e)
             try { engineServer?.stop() } catch (_: Exception) {}
-            EngineHolder.server = LocalEngineServer(this)
+            EngineHolder.server = LocalEngineServer(applicationContext)
             engineServer = EngineHolder.server
             try {
                 engineServer?.start()
