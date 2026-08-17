@@ -63,11 +63,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 log("yt-dlp update check failed; keeping bundled binary", e)
             }
         }
-        val version = try {
-            YoutubeDL.getInstance().version(context) ?: "bundled"
-        } catch (_: Exception) {
-            "bundled"
-        }
+        val version = try { YoutubeDL.getInstance().version(context) ?: "bundled" } catch (_: Exception) { "bundled" }
         log("Android yt-dlp engine ready: $version")
         return version
     }
@@ -108,17 +104,11 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val token = poTokenProvider.getMwebGvsToken()
             val visitorData = poTokenProvider.visitorData()
             if (!visitorData.isNullOrBlank()) {
-                request.addOption(
-                    "--extractor-args",
-                    "youtube:visitor_data=$visitorData"
-                )
+                request.addOption("--extractor-args", "youtube:visitor_data=$visitorData")
                 log("Attached Innertube visitorData to YouTube request")
             }
             if (!token.isNullOrBlank()) {
-                request.addOption(
-                    "--extractor-args",
-                    "youtube:player-client=mweb;visitor_data=$visitorData;po_token=mweb.gvs+$token"
-                )
+                request.addOption("--extractor-args", "youtube:player-client=mweb;visitor_data=$visitorData;po_token=mweb.gvs+$token")
                 request.addOption("--extractor-args", "youtube:pot_trace=true")
                 log("Generated and attached mweb GVS PO Token for YouTube")
             } else {
@@ -136,8 +126,7 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         return r
     }
 
-    private fun json(status: Response.Status, body: String) =
-        newFixedLengthResponse(status, "application/json; charset=utf-8", body)
+    private fun json(status: Response.Status, body: String) = newFixedLengthResponse(status, "application/json; charset=utf-8", body)
 
     private fun versions(): String {
         return try {
@@ -156,6 +145,11 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         }
     }
 
+    private fun isYoutubeUrl(url: String): Boolean = try {
+        val host = Uri.parse(url).host?.lowercase(Locale.US).orEmpty()
+        host == "youtube.com" || host.endsWith(".youtube.com") || host == "youtu.be" || host.endsWith(".youtu.be")
+    } catch (_: Exception) { false }
+
     private fun analyzeUrl(session: IHTTPSession): Response {
         return try {
             val files = HashMap<String, String>(); session.parseBody(files)
@@ -164,9 +158,14 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             if (url.isEmpty()) return json(Response.Status.BAD_REQUEST, """{"ok":false,"error":"URL is required"}""")
             log("Analyzing URL with Android yt-dlp: $url")
             ensureEngine()
-            // Analyze without imported cookies so YouTube exposes the full public format catalogue.
-            // Cookies remain available for the download retry path below.
             val request = YoutubeDLRequest(url)
+            if (isYoutubeUrl(url)) {
+                // Use the same YouTube authentication material for analysis that the download path uses.
+                // This ensures imported cookies and the generated visitorData/PO token are actually
+                // available to yt-dlp when YouTube blocks unauthenticated format extraction.
+                addAuthenticationOptions(request)
+                log("YouTube analysis request prepared with cookies/visitorData/PO token authentication")
+            }
             val info: VideoInfo = YoutubeDL.getInstance().getInfo(request)
             val formats = JSONArray()
             for (fmt in info.formats.orEmpty()) {
@@ -214,25 +213,11 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
 
     private fun diagnostic(e: Throwable): String {
         val parts = ArrayList<String>(); var x: Throwable? = e; var n = 0
-        while (x != null && n++ < 4) {
-            parts += "${x::class.java.simpleName}: ${x.message ?: ""}"
-            x = x.cause
-        }
+        while (x != null && n++ < 4) { parts += "${x::class.java.simpleName}: ${x.message ?: ""}"; x = x.cause }
         return parts.joinToString(" | ").replace(Regex("\\s+"), " ").take(1500)
     }
 
-    private fun buildRequest(
-        jobId: String,
-        url: String,
-        format: String,
-        start: String,
-        end: String,
-        audioOnly: Boolean,
-        audioFormat: String,
-        audioQuality: String,
-        container: String,
-        useCookies: Boolean = true
-    ): YoutubeDLRequest {
+    private fun buildRequest(jobId: String, url: String, format: String, start: String, end: String, audioOnly: Boolean, audioFormat: String, audioQuality: String, container: String, useCookies: Boolean = true): YoutubeDLRequest {
         val dir = jobs[jobId] ?: throw IllegalStateException("Unknown download job")
         return YoutubeDLRequest(url).apply {
             if (useCookies) addAuthenticationOptions(this) else addYoutubePoToken(this)
@@ -249,23 +234,18 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 addOption("--download-sections", "*$start-$end")
                 addOption("--force-keyframes-at-cuts")
             }
-            if (container.isNotEmpty() && container != "auto") {
-                addOption("--merge-output-format", container)
-            }
+            if (container.isNotEmpty() && container != "auto") addOption("--merge-output-format", container)
             if (audioOnly) {
                 addOption("-x")
                 if (audioFormat.isNotEmpty()) addOption("--audio-format", audioFormat)
-                if (audioQuality.isNotEmpty() && !audioQuality.equals("best", true)) {
-                    addOption("--audio-quality", audioQuality)
-                }
+                if (audioQuality.isNotEmpty() && !audioQuality.equals("best", true)) addOption("--audio-quality", audioQuality)
             }
         }
     }
 
     private fun extractSpeed(line: String?): String? {
         if (line.isNullOrBlank()) return null
-        val match = Regex("(?:at\\s+|\\s)(\\d+(?:\\.\\d+)?\\s*[KMGTP]?i?B/s)", RegexOption.IGNORE_CASE)
-            .find(line)
+        val match = Regex("(?:at\\s+|\\s)(\\d+(?:\\.\\d+)?\\s*[KMGTP]?i?B/s)", RegexOption.IGNORE_CASE).find(line)
         return match?.groupValues?.getOrNull(1)?.replace(" ", "")
     }
 
@@ -286,15 +266,9 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         val request = jobRequests[jobId] ?: return
         try {
             val stateBeforeEngine = jobStates[jobId] ?: return
-            if (stateBeforeEngine != "running") {
-                log("Download $jobId start suppressed before engine init: state=$stateBeforeEngine")
-                return
-            }
+            if (stateBeforeEngine != "running") { log("Download $jobId start suppressed before engine init: state=$stateBeforeEngine"); return }
             ensureEngine()
-            if (jobStates[jobId] != "running") {
-                log("Download $jobId start suppressed after engine init: state=${jobStates[jobId]}")
-                return
-            }
+            if (jobStates[jobId] != "running") { log("Download $jobId start suppressed after engine init: state=${jobStates[jobId]}"); return }
             writeProgress(dir, "starting", 0.0, null, "Starting download…")
             try {
                 YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
@@ -303,83 +277,43 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
                 }
             } catch (firstError: Exception) {
                 val cookieRequest = jobCookieRequests[jobId]
-                val canRetryWithCookies = cookieRequest != null &&
-                    jobStates[jobId] != "paused" && jobStates[jobId] != "cancelled"
+                val canRetryWithCookies = cookieRequest != null && jobStates[jobId] != "paused" && jobStates[jobId] != "cancelled"
                 if (!canRetryWithCookies) throw firstError
                 log("Initial YouTube download failed; retrying the same selected format with imported cookies", firstError)
                 jobStates[jobId] = "retrying"
-                writeProgress(dir, "retrying", readPercent(dir).toDouble(), null,
-                    "Retrying with imported YouTube cookies…")
+                writeProgress(dir, "retrying", readPercent(dir).toDouble(), null, "Retrying with imported YouTube cookies…")
                 val retryRequest = cookieRequest!!
                 addAuthenticationOptions(retryRequest)
                 log("PO Token and visitorData ready before cookie retry")
-                // The user may have paused/cancelled while authentication was being prepared.
-                // Never start the retry process after a control request has changed the state.
-                if (jobStates[jobId] != "retrying") {
-                    log("Cookie retry suppressed for $jobId: state=${jobStates[jobId]}")
-                    return
-                }
+                if (jobStates[jobId] != "retrying") { log("Cookie retry suppressed for $jobId: state=${jobStates[jobId]}"); return }
                 YoutubeDL.getInstance().execute(retryRequest, jobId) { progress, eta, line ->
                     val state = jobStates[jobId] ?: "running"
                     writeProgress(dir, state, progress.toDouble(), eta, line)
                 }
             }
             when (jobStates[jobId]) {
-                "paused" -> {
-                    writeStatus(dir, """{"status":"paused","percent":${readPercent(dir)}}""")
-                    return
-                }
-                "cancelled" -> {
-                    writeStatus(dir, """{"status":"cancelled","percent":0}""")
-                    cleanupJob(jobId, deleteFiles = true)
-                    return
-                }
+                "paused" -> { writeStatus(dir, """{"status":"paused","percent":${readPercent(dir)}}"""); return }
+                "cancelled" -> { writeStatus(dir, """{"status":"cancelled","percent":0}"""); cleanupJob(jobId, deleteFiles = true); return }
             }
-            val source = dir.walkTopDown()
-                .filter { it.isFile && !it.name.endsWith(".part") && it.name != "android_status.json" }
-                .maxByOrNull { it.lastModified() }
-                ?: throw IllegalStateException("yt-dlp completed but no output file was found")
+            val source = dir.walkTopDown().filter { it.isFile && !it.name.endsWith(".part") && it.name != "android_status.json" }.maxByOrNull { it.lastModified() } ?: throw IllegalStateException("yt-dlp completed but no output file was found")
             val saved = saveToDownloads(source, source.name)
             writeStatus(dir, JSONObject().apply {
-                put("status", "completed")
-                put("percent", 100)
-                put("filename", saved.first)
-                put("uri", saved.second)
-                put("size", source.length())
-                put("speed", JSONObject.NULL)
+                put("status", "completed"); put("percent", 100); put("filename", saved.first); put("uri", saved.second); put("size", source.length()); put("speed", JSONObject.NULL)
             }.toString())
             log("Download $jobId completed: ${saved.first}")
             source.delete()
         } catch (e: Exception) {
             val state = jobStates[jobId]
-            if (state == "paused") {
-                writeStatus(dir, """{"status":"paused","percent":${readPercent(dir)}}""")
-                log("Download $jobId paused")
-                return
-            }
-            if (state == "cancelled") {
-                writeStatus(dir, """{"status":"cancelled","percent":0}""")
-                log("Download $jobId cancelled")
-                cleanupJob(jobId, deleteFiles = true)
-                return
-            }
+            if (state == "paused") { writeStatus(dir, """{"status":"paused","percent":${readPercent(dir)}}"""); log("Download $jobId paused"); return }
+            if (state == "cancelled") { writeStatus(dir, """{"status":"cancelled","percent":0}"""); log("Download $jobId cancelled"); cleanupJob(jobId, deleteFiles = true); return }
             val msg = diagnostic(e)
             log("Download $jobId FAILED: $msg", e)
             exportLogToDownloads()
-            writeStatus(dir, JSONObject().apply {
-                put("status", "failed: $msg")
-                put("percent", 0)
-                put("error", msg)
-                put("exception", e::class.java.name)
-            }.toString())
+            writeStatus(dir, JSONObject().apply { put("status", "failed: $msg"); put("percent", 0); put("error", msg); put("exception", e::class.java.name) }.toString())
         }
     }
 
-    private fun readPercent(dir: File): Int {
-        return try {
-            JSONObject(File(dir, "android_status.json").readText()).optInt("percent", 0)
-        } catch (_: Exception) { 0 }
-    }
+    private fun readPercent(dir: File): Int = try { JSONObject(File(dir, "android_status.json").readText()).optInt("percent", 0) } catch (_: Exception) { 0 }
 
     private fun startDownload(session: IHTTPSession): Response {
         return try {
@@ -388,8 +322,6 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             val url = req.optString("url", "").trim()
             if (url.isEmpty()) return json(Response.Status.BAD_REQUEST, """{"ok":false,"error":"URL is required"}""")
             val jobId = UUID.randomUUID().toString().replace("-", "").take(12)
-            // Jobs contain active media and must not live in Android's cache directory,
-            // which the OS may delete while a long download is still running.
             val dir = File(context.filesDir, "media-downloads/$jobId")
             if (!dir.mkdirs() && !dir.isDirectory) throw IllegalStateException("Could not create download directory")
             val format = req.optString("format", "").trim()
@@ -403,32 +335,17 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
             jobs[jobId] = dir
             jobStates[jobId] = "running"
             val youtube = isYoutubeUrl(url)
-            jobRequests[jobId] = buildRequest(
-                jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container,
-                useCookies = !youtube
-            )
+            jobRequests[jobId] = buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = !youtube)
             if (youtube && youtubeCookiesFile() != null) {
-                jobCookieRequests[jobId] = buildRequest(
-                    jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container,
-                    useCookies = true
-                )
+                jobCookieRequests[jobId] = buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = true)
             }
             writeStatus(dir, """{"status":"starting","percent":0,"speed":null}""")
             log("Starting download $jobId: format=$format audioOnly=$audioOnly section=$start-$end")
             executor.execute { runJob(jobId) }
-            json(Response.Status.OK, JSONObject().apply {
-                put("ok", true)
-                put("job_id", jobId)
-            }.toString())
+            json(Response.Status.OK, JSONObject().apply { put("ok", true); put("job_id", jobId) }.toString())
         } catch (e: Exception) {
-            val msg = diagnostic(e)
-            log("Could not start download: $msg", e)
-            exportLogToDownloads()
-            json(Response.Status.INTERNAL_ERROR, JSONObject().apply {
-                put("ok", false)
-                put("error", msg)
-                put("exception", e::class.java.name)
-            }.toString())
+            val msg = diagnostic(e); log("Could not start download: $msg", e); exportLogToDownloads()
+            json(Response.Status.INTERNAL_ERROR, JSONObject().apply { put("ok", false); put("error", msg); put("exception", e::class.java.name) }.toString())
         }
     }
 
@@ -436,316 +353,84 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         val jobDir = jobs[jobId]
         val jobMarker = jobDir?.absolutePath ?: jobId
         log("CONTROL: locating download processes for job=$jobId marker=$jobMarker")
-
         try {
             val appPid = android.os.Process.myPid()
             val parentByPid = HashMap<Int, Int>()
             val commandByPid = HashMap<Int, String>()
             val exeByPid = HashMap<Int, String>()
-
             for (entry in File("/proc").listFiles().orEmpty()) {
                 val pid = entry.name.toIntOrNull() ?: continue
                 if (pid == appPid) continue
                 try {
                     val status = File(entry, "status").readText()
-                    val ppid = status.lineSequence()
-                        .firstOrNull { it.startsWith("PPid:") }
-                        ?.substringAfter(":")?.trim()?.toIntOrNull() ?: continue
+                    val ppid = status.lineSequence().firstOrNull { it.startsWith("PPid:") }?.substringAfter(":")?.trim()?.toIntOrNull() ?: continue
                     parentByPid[pid] = ppid
-                    val cmd = File(entry, "cmdline").readBytes()
-                        .toString(Charsets.UTF_8).replace('\u0000', ' ').trim()
+                    val cmd = File(entry, "cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ').trim()
                     commandByPid[pid] = cmd
                     try { exeByPid[pid] = File(entry, "exe").canonicalPath } catch (_: Exception) {}
                 } catch (_: Exception) {}
             }
-
             val roots = commandByPid.keys.filter { pid ->
-                val cmd = commandByPid[pid].orEmpty()
-                val exe = exeByPid[pid].orEmpty()
-                cmd.contains(jobMarker, ignoreCase = true) ||
-                    cmd.contains("yt-dlp", ignoreCase = true) ||
-                    cmd.contains("libpython.so", ignoreCase = true) ||
-                    exe.contains("libpython.so", ignoreCase = true) ||
-                    exe.contains("yt-dlp", ignoreCase = true)
+                val cmd = commandByPid[pid].orEmpty(); val exe = exeByPid[pid].orEmpty()
+                cmd.contains(jobMarker, ignoreCase = true) || cmd.contains("yt-dlp", ignoreCase = true) || cmd.contains("libpython.so", ignoreCase = true) || exe.contains("libpython.so", ignoreCase = true) || exe.contains("yt-dlp", ignoreCase = true)
             }.toSet()
-
             fun belongsToRoot(pid: Int): Boolean {
-                var current = pid
-                val seen = HashSet<Int>()
-                while (seen.add(current) && current != appPid) {
-                    if (current in roots) return true
-                    current = parentByPid[current] ?: return false
-                }
+                var current = pid; val seen = HashSet<Int>()
+                while (seen.add(current) && current != appPid) { if (current in roots) return true; current = parentByPid[current] ?: return false }
                 return current in roots
             }
-
-            val targets = (roots + parentByPid.keys.filter { belongsToRoot(it) })
-                .filter { it != appPid }
-                .distinct()
-                .sortedDescending()
-
-            log("CONTROL: found ${targets.size} candidate process(es) for job=$jobId")
-            for (pid in targets) {
-                val cmd = commandByPid[pid].orEmpty()
-                log("CONTROL: killing pid=$pid cmd=${cmd.take(240)}")
-                try {
-                    android.os.Process.sendSignal(pid, android.os.Process.SIGNAL_KILL)
-                } catch (e: Exception) {
-                    log("CONTROL: sendSignal failed for pid=$pid", e)
-                    try { android.os.Process.killProcess(pid) } catch (_: Exception) {}
-                }
-            }
-
-            // Also ask youtubedl-android to cancel its registered Process. Its public
-            // API is the canonical cancellation path; our /proc scan above covers
-            // child processes such as Python/FFmpeg that the library may miss.
-            try {
-                val stopped = YoutubeDL.getInstance().destroyProcessById(jobId)
-                log("CONTROL: youtubedl destroyProcessById($jobId)=$stopped")
-            } catch (e: Exception) {
-                log("CONTROL: youtubedl destroyProcessById failed for $jobId", e)
-            }
-        } catch (e: Exception) {
-            log("CONTROL: process scan failed for job=$jobId", e)
-        }
-    }
-
-    private fun controlDownload(id: String, action: String): Response {
-    val dir = jobs[id]
-        ?: return json(
-            Response.Status.NOT_FOUND,
-            """{"ok":false,"error":"Unknown job"}"""
-        )
-
-    return try {
-        when (action.lowercase(Locale.US)) {
-
-            "pause" -> {
-                val current = jobStates[id] ?: "unknown"
-
-                // A YouTube cookie retry is still an active download. It must remain
-                // controllable while yt-dlp is between the first request and retry.
-                if (current != "running" && current != "retrying") {
-                    return json(
-                        Response.Status.CONFLICT,
-                        """{"ok":false,"error":"Job is not running","status":"$current"}"""
-                    )
-                }
-
-                // Set the state BEFORE killing yt-dlp.
-                // This prevents runJob() from entering the retry path.
-                jobStates[id] = "paused"
-                log("Pause requested for download $id")
-
-                try {
-                    forceStopJobProcess(id)
-                } catch (e: Exception) {
-                    log("Pause process termination warning for $id", e)
-                }
-
-                writeStatus(
-                    dir,
-                    """{"status":"paused","percent":${readPercent(dir)}}"""
-                )
-
-                json(
-                    Response.Status.OK,
-                    """{"ok":true,"status":"paused"}"""
-                )
-            }
-
-            "resume" -> {
-                val current = jobStates[id] ?: "unknown"
-
-                if (current != "paused") {
-                    return json(
-                        Response.Status.CONFLICT,
-                        """{"ok":false,"error":"Job is not paused","status":"$current"}"""
-                    )
-                }
-
-                jobStates[id] = "running"
-
-                writeStatus(
-                    dir,
-                    """{"status":"resuming","percent":${readPercent(dir)}}"""
-                )
-
-                log("Resume requested for download $id")
-
-                executor.execute {
-                    runJob(id)
-                }
-
-                json(
-                    Response.Status.OK,
-                    """{"ok":true,"status":"resuming"}"""
-                )
-            }
-
-            "cancel" -> {
-                val current = jobStates[id] ?: "unknown"
-
-                if (current == "completed" || current == "cancelled") {
-                    return json(
-                        Response.Status.CONFLICT,
-                        """{"ok":false,"error":"Job is already finished","status":"$current"}"""
-                    )
-                }
-
-                // IMPORTANT:
-                // Set cancelled BEFORE destroying yt-dlp.
-                // runJob() will then refuse to retry after the process is killed.
-                jobStates[id] = "cancelled"
-
-                log("Terminate requested for download $id")
-
-                try {
-                    forceStopJobProcess(id)
-                } catch (e: Exception) {
-                    log("Terminate process warning for $id", e)
-                }
-
-                writeStatus(
-                    dir,
-                    """{"status":"cancelled","percent":0}"""
-                )
-
-                json(
-                    Response.Status.OK,
-                    """{"ok":true,"status":"cancelled"}"""
-                )
-            }
-
-            else -> {
-                json(
-                    Response.Status.BAD_REQUEST,
-                    """{"ok":false,"error":"Unknown control action: ${action.replace("\"", "'")}"}"""
-                )
-            }
-        }
-    } catch (e: Exception) {
-        log("Download control FAILED for $id/$action", e)
-
-        json(
-            Response.Status.INTERNAL_ERROR,
-            """{"ok":false,"error":"${diagnostic(e).replace("\"", "'")}"}"""
-        )
-    }
-}
-
-    private fun saveToDownloads(source: File, displayName: String): Pair<String, String> {
-        val treeUri = preferences.getString("download_tree_uri", null)
-        if (!treeUri.isNullOrBlank()) {
-            try {
-                val tree = DocumentFile.fromTreeUri(context, Uri.parse(treeUri))
-                if (tree != null && tree.canWrite()) {
-                    val safeName = displayName.ifBlank { source.name }
-                    val target = tree.createFile("video/*", safeName)
-                    if (target != null) {
-                        context.contentResolver.openOutputStream(target.uri)?.use { out -> source.inputStream().use { it.copyTo(out) } }
-                        return safeName to target.uri.toString()
-                    }
-                }
-            } catch (e: Exception) { log("Custom download folder failed; falling back to Downloads", e) }
-        }
-        val resolver = context.contentResolver
-        val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, displayName.ifBlank { source.name })
-            put(MediaStore.Downloads.MIME_TYPE, guessMime(source.name))
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                put(MediaStore.Downloads.IS_PENDING, 1)
-            }
-        }
-        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: throw IllegalStateException("Could not create Downloads entry")
-        resolver.openOutputStream(uri)?.use { out -> source.inputStream().use { it.copyTo(out) } }
-            ?: throw IllegalStateException("Could not open Downloads output")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-        }
-        return displayName.ifBlank { source.name } to uri.toString()
-    }
-
-    private fun guessMime(name: String): String {
-        if (name.startsWith("audio.", ignoreCase = true)) return "audio/webm"
-        if (name.startsWith("video.", ignoreCase = true)) return "video/webm"
-        return when (name.substringAfterLast('.', "").lowercase(Locale.US)) {
-            "mp4" -> "video/mp4"
-            "webm" -> "video/webm"
-            "mkv" -> "video/x-matroska"
-            "mp3" -> "audio/mpeg"
-            "m4a" -> "audio/mp4"
-            "opus" -> "audio/ogg"
-            "wav" -> "audio/wav"
-            else -> "application/octet-stream"
-        }
-    }
-
-    private fun writeStatus(dir: File, json: String) {
-        try {
-            if (!dir.exists() && !dir.mkdirs()) {
-                log("Could not create job directory for status: ${dir.absolutePath}")
-                return
-            }
-            File(dir, "android_status.json").writeText(json)
-        } catch (e: Exception) { log("Could not write job status", e) }
-    }
-
-    private fun isYoutubeUrl(url: String): Boolean {
-        return try {
-            val host = java.net.URI(url).host?.lowercase(Locale.US) ?: return false
-            host == "youtube.com" || host.endsWith(".youtube.com") ||
-                host == "youtu.be" || host.endsWith(".youtu.be")
-        } catch (_: Exception) { false }
+            val descendants = commandByPid.keys.filter { it != appPid && belongsToRoot(it) }.toSet()
+            for (pid in descendants) try { android.os.Process.killProcess(pid) } catch (_: Exception) {}
+            log("CONTROL: terminated ${descendants.size} processes for job=$jobId")
+        } catch (e: Exception) { log("CONTROL: process cleanup failed for job=$jobId", e) }
     }
 
     private fun cleanupJob(jobId: String, deleteFiles: Boolean) {
-        val dir = jobs.remove(jobId)
-        jobRequests.remove(jobId)
-        jobCookieRequests.remove(jobId)
-        jobStates.remove(jobId)
-        if (deleteFiles) dir?.deleteRecursively()
+        if (deleteFiles) jobs[jobId]?.deleteRecursively()
+        jobs.remove(jobId); jobRequests.remove(jobId); jobCookieRequests.remove(jobId); jobStates.remove(jobId)
+    }
+
+    private fun saveToDownloads(source: File, name: String): Pair<String, String> {
+        val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val mime = when (safe.substringAfterLast('.', "").lowercase(Locale.US)) { "mp4" -> "video/mp4"; "mkv" -> "video/x-matroska"; "webm" -> "video/webm"; "m4a" -> "audio/mp4"; "opus" -> "audio/ogg"; "mp3" -> "audio/mpeg"; "flac" -> "audio/flac"; else -> "application/octet-stream" }
+        val resolver = context.contentResolver
+        val values = ContentValues().apply { put(MediaStore.Downloads.DISPLAY_NAME, safe); put(MediaStore.Downloads.MIME_TYPE, mime); put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS); put(MediaStore.Downloads.IS_PENDING, 1) }
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("Could not create Downloads entry")
+        try { resolver.openOutputStream(uri)?.use { out -> source.inputStream().use { it.copyTo(out) } } ?: throw IllegalStateException("Could not open Downloads output"); values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0); resolver.update(uri, values, null, null); return safe to uri.toString() } catch (e: Exception) { resolver.delete(uri, null, null); throw e }
+    }
+
+    private fun writeStatus(dir: File, json: String) { try { File(dir, "android_status.json").writeText(json) } catch (e: Exception) { log("Could not write job status", e) } }
+
+    private fun isRunningJob(jobId: String): Boolean = jobStates[jobId] == "running" || jobStates[jobId] == "retrying"
+
+    private fun handleControl(session: IHTTPSession): Response {
+        return try {
+            val parts = session.uri.split('/'); val jobId = parts.getOrNull(2).orEmpty()
+            val files = HashMap<String, String>(); session.parseBody(files); val action = JSONObject(files["postData"] ?: "{}").optString("action", "").lowercase(Locale.US)
+            if (jobId.isBlank() || !jobs.containsKey(jobId)) return json(Response.Status.NOT_FOUND, """{"ok":false,"error":"Unknown job"}""")
+            when (action) {
+                "pause" -> { jobStates[jobId] = "paused"; forceStopJobProcess(jobId); writeStatus(jobs[jobId]!!, """{"status":"paused","percent":${readPercent(jobs[jobId]!!)}}"""); log("CONTROL: paused job=$jobId"); json(Response.Status.OK, """{"ok":true,"status":"paused"}""") }
+                "resume" -> { if (jobStates[jobId] == "paused") { jobStates[jobId] = "running"; writeStatus(jobs[jobId]!!, """{"status":"running","percent":${readPercent(jobs[jobId]!!)}}"""); executor.execute { runJob(jobId) }; log("CONTROL: resumed job=$jobId") }; json(Response.Status.OK, """{"ok":true,"status":"running"}""") }
+                "cancel" -> { jobStates[jobId] = "cancelled"; forceStopJobProcess(jobId); writeStatus(jobs[jobId]!!, """{"status":"cancelled","percent":0}"""); log("CONTROL: cancelled job=$jobId"); cleanupJob(jobId, true); json(Response.Status.OK, """{"ok":true,"status":"cancelled"}""") }
+                else -> json(Response.Status.BAD_REQUEST, """{"ok":false,"error":"Unknown control action"}""")
+            }
+        } catch (e: Exception) { log("Control request failed", e); json(Response.Status.INTERNAL_ERROR, """{"ok":false,"error":"${JSONObject.quote(e.message ?: "Control request failed")}"}""") }
     }
 
     override fun serve(session: IHTTPSession): Response {
-        return try {
-            if (session.method == Method.OPTIONS) return cors(newFixedLengthResponse(Response.Status.OK, "text/plain", ""))
-            val path = session.uri.substringBefore('?')
-            val response = when {
-                path == "/health" -> json(Response.Status.OK, versions())
-                path == "/analyze" && session.method == Method.POST -> analyzeUrl(session)
-                path == "/download" && session.method == Method.POST -> startDownload(session)
-                path.startsWith("/download/") && path.endsWith("/control") && session.method == Method.POST -> {
-                    val id = path.removePrefix("/download/").removeSuffix("/control").trim('/')
-                    val files = HashMap<String, String>(); session.parseBody(files)
-                    val action = JSONObject(files["postData"] ?: "{}").optString("action", "")
-                    log("CONTROL HTTP request received: job=$id action=$action")
-                    controlDownload(id, action)
-                }
-                path.startsWith("/status/") -> {
-                    val id = path.removePrefix("/status/").trim('/')
-                    val dir = jobs[id]
-                    if (dir == null) json(Response.Status.NOT_FOUND, """{"ok":false,"error":"Unknown job"}""")
-                    else {
-                        val file = File(dir, "android_status.json")
-                        json(Response.Status.OK, if (file.isFile) file.readText() else """{"status":"starting","percent":0}""")
-                    }
-                }
-                path == "/logs" -> {
-                    if (logFile.isFile) newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", logFile.readText())
-                    else newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", "No log yet")
-                }
-                else -> newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found")
+        return when {
+            session.method == Method.OPTIONS -> cors(newFixedLengthResponse(Response.Status.OK, "text/plain", ""))
+            session.method == Method.GET && session.uri == "/health" -> cors(json(Response.Status.OK, """{"ok":true}"""))
+            session.method == Method.GET && session.uri == "/versions" -> cors(json(Response.Status.OK, versions()))
+            session.method == Method.POST && session.uri == "/analyze" -> cors(analyzeUrl(session))
+            session.method == Method.POST && session.uri == "/download" -> cors(startDownload(session))
+            session.method == Method.GET && session.uri.startsWith("/status/") -> {
+                val jobId = session.uri.removePrefix("/status/").substringBefore('/')
+                val dir = jobs[jobId]
+                if (dir == null || !dir.isDirectory) cors(json(Response.Status.NOT_FOUND, """{"ok":false,"error":"Unknown job"}""")) else cors(newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", File(dir, "android_status.json").takeIf { it.isFile }?.readText() ?: """{"status":"unknown","percent":0}"""))
             }
-            cors(response)
-        } catch (e: Exception) {
-            log("HTTP request FAILED", e); exportLogToDownloads()
-            cors(json(Response.Status.INTERNAL_ERROR, JSONObject().apply {
-                put("ok", false); put("error", diagnostic(e))
-            }.toString()))
+            session.method == Method.POST && session.uri.startsWith("/download/") && session.uri.endsWith("/control") -> cors(handleControl(session))
+            else -> cors(json(Response.Status.NOT_FOUND, """{"ok":false,"error":"Not found"}"""))
         }
     }
 }
