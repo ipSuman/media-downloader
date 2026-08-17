@@ -1,14 +1,18 @@
 package com.ipsuman.mediadownloader
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.io.BufferedReader
@@ -23,12 +27,15 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("media_downloader", MODE_PRIVATE) }
     private val folderPickerRequestCode = 4101
     private val cookiesPickerRequestCode = 4102
+    private val notificationRequestCode = 4103
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         updateYtdlpConfig()
         startLocalEngine()
+        startBackgroundService()
+        requestNotificationPermissionIfNeeded()
         webView = WebView(this)
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
@@ -46,6 +53,50 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl("file:///android_asset/index.html")
     }
 
+    private fun logBackgroundEvent(message: String, error: Throwable? = null) {
+        val file = File(filesDir, "media-downloader-engine.log")
+        val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
+        try {
+            file.appendText("[$stamp] $message\n")
+            if (error != null) file.appendText(error.stackTraceToString() + "\n")
+        } catch (_: Exception) {}
+        android.util.Log.d("MediaDownloader", message, error)
+    }
+
+    private fun startBackgroundService() {
+        val notificationGranted = Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        logBackgroundEvent("BACKGROUND: start requested from visible Activity; notificationPermission=$notificationGranted")
+        try {
+            val intent = Intent(this, DownloadService::class.java).apply {
+                action = "com.ipsuman.mediadownloader.START_ENGINE"
+            }
+            ContextCompat.startForegroundService(this, intent)
+            logBackgroundEvent("BACKGROUND: startForegroundService() returned successfully")
+        } catch (e: Exception) {
+            logBackgroundEvent("BACKGROUND: startForegroundService() FAILED", e)
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < 33) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            logBackgroundEvent("NOTIFICATION: POST_NOTIFICATIONS already granted")
+            return
+        }
+        logBackgroundEvent("NOTIFICATION: POST_NOTIFICATIONS not granted; requesting runtime permission")
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), notificationRequestCode)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == notificationRequestCode) {
+            val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+            logBackgroundEvent("NOTIFICATION: POST_NOTIFICATIONS permission result=$granted")
+            if (granted) DownloadService.instance?.postDownloadStatus("service", "Background engine active")
+        }
+    }
+
     private fun startLocalEngine() {
         try {
             if (engineServer == null) engineServer = LocalEngineServer(this)
@@ -54,9 +105,6 @@ class MainActivity : AppCompatActivity() {
                 engineServer?.start()
             }
             android.util.Log.d("MediaDownloader", "Local engine server alive=${engineServer?.isAlive}")
-            // IMPORTANT: the server's /health endpoint calls the real synchronized
-            // yt-dlp + FFmpeg initialization. This request forces that initialization
-            // during app startup instead of waiting for the first user action.
             warmUpEngineInBackground()
         } catch (e: Exception) {
             android.util.Log.e("MediaDownloader", "Local engine failed to start", e)
@@ -73,16 +121,17 @@ class MainActivity : AppCompatActivity() {
             try {
                 android.util.Log.d("MediaDownloader", "ENGINE WARM-UP: requesting /health to force yt-dlp + FFmpeg initialization")
                 connection = (URL("http://127.0.0.1:8765/health").openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = 5000
-                    readTimeout = 10 * 60 * 1000
+                    requestMethod = "GET"; connectTimeout = 5000; readTimeout = 10 * 60 * 1000
                     setRequestProperty("Cache-Control", "no-store")
                 }
                 val code = connection!!.responseCode
                 val body = (if (code in 200..299) connection!!.inputStream else connection!!.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
                 android.util.Log.d("MediaDownloader", "ENGINE WARM-UP: /health http=$code body=${body.take(1000)}")
-            } catch (e: Exception) { android.util.Log.e("MediaDownloader", "ENGINE WARM-UP FAILED", e) }
-            finally { connection?.disconnect() }
+                DownloadService.instance?.postDownloadStatus("engine", "Engine ready")
+            } catch (e: Exception) {
+                android.util.Log.e("MediaDownloader", "ENGINE WARM-UP FAILED", e)
+                logBackgroundEvent("BACKGROUND: engine warm-up failed while service should be protecting process", e)
+            } finally { connection?.disconnect() }
         }.start()
     }
 
@@ -127,6 +176,18 @@ class MainActivity : AppCompatActivity() {
 
     private inner class AndroidBridge{@JavascriptInterface fun chooseDownloadFolder(){runOnUiThread{openFolderPicker()}};@JavascriptInterface fun clearDownloadFolder(){runOnUiThread{clearSelectedFolder()}};@JavascriptInterface fun getDownloadFolderName():String=prefs.getString("download_tree_name","")?:"";@JavascriptInterface fun chooseYoutubeCookies(){runOnUiThread{openYoutubeCookiesPicker()}};@JavascriptInterface fun clearYoutubeCookies(){runOnUiThread{this@MainActivity.clearYoutubeCookies()}};@JavascriptInterface fun hasYoutubeCookies():Boolean=File(filesDir,"youtube-cookies.txt").let{it.isFile&&it.length()>0L};@JavascriptInterface fun generateDiagnosticLog(){runOnUiThread{this@MainActivity.generateDiagnosticLog()}};@JavascriptInterface fun controlDownload(jobId:String,action:String,requestId:String){nativeControlDownload(jobId,action,requestId)}}
     private object JSONObjectEscaper{fun escape(value:String):String=value.replace("\\","\\\\").replace("'","\\'").replace("\n","\\n").replace("\r","\\r");fun quote(value:String):String="'${escape(value)}'"}
-    override fun onDestroy(){try{engineServer?.stop()}catch(_:Exception){};engineServer=null;super.onDestroy()}
+
+    override fun onDestroy(){
+        // Do NOT stop the engine here when the foreground service is alive.
+        // The service keeps this process alive so yt-dlp can continue after the Activity/WebView disappears.
+        if (DownloadService.instance == null) {
+            logBackgroundEvent("BACKGROUND: Activity destroyed and service is not alive; stopping local engine")
+            try{engineServer?.stop()}catch(_:Exception){}
+            engineServer=null
+        } else {
+            logBackgroundEvent("BACKGROUND: Activity destroyed; foreground service remains alive, engine server kept running")
+        }
+        super.onDestroy()
+    }
     override fun onBackPressed(){if(webView.canGoBack())webView.goBack()else super.onBackPressed()}
 }
