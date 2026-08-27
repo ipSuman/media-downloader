@@ -14,7 +14,7 @@ if 'private val preferences = context.getSharedPreferences("media_downloader", C
 if 'private val jobBuilders = ConcurrentHashMap<String, () -> YoutubeDLRequest>()' not in text:
     marker = '    private val jobCookieRequests = ConcurrentHashMap<String, YoutubeDLRequest>()\n'
     if marker not in text: raise SystemExit("job request insertion point not found")
-    text = text.replace(marker, marker + '    private val jobBuilders = ConcurrentHashMap<String, () -> YoutubeDLRequest>()\n    private val jobYoutube = ConcurrentHashMap<String, Boolean>()\n', 1)
+    text = text.replace(marker, marker + '    private val jobBuilders = ConcurrentHashMap<String, () -> YoutubeDLRequest>()\n    private val jobYoutube = ConcurrentHashMap<String, Boolean>()\n    private val jobCookieBuilders = ConcurrentHashMap<String, () -> YoutubeDLRequest>()\n', 1)
 
 old_auth = '''    private fun addAuthenticationOptions(request: YoutubeDLRequest) {
         val cookies = youtubeCookiesFile()
@@ -67,7 +67,7 @@ new_sig = 'private fun buildRequest(jobId: String, url: String, format: String, 
 if old_sig not in text: raise SystemExit("buildRequest signature not found")
 text = text.replace(old_sig, new_sig, 1)
 old_line = '            if (useCookies) addAuthenticationOptions(this) else addYoutubePoToken(this)\n'
-new_line = '            if (useCookies) { if (includePoToken) addAuthenticationOptions(this) else { youtubeCookiesFile()?.let { addOption("--cookies", it.absolutePath) } } } else addYoutubePoToken(this)\n'
+new_line = '            if (useCookies) { if (includePoToken) addAuthenticationOptions(this) else { youtubeCookiesFile()?.let { addOption("--cookies", it.absolutePath) } } } else if (isYoutubeUrl(url)) addYoutubePoToken(this)\n'
 if old_line not in text: raise SystemExit("buildRequest auth line not found")
 text = text.replace(old_line, new_line, 1)
 
@@ -140,10 +140,10 @@ run_replacement = '''            try {
                     }
                 }
                 if (!poRetrySucceeded) {
-                    val cookieFile = youtubeCookiesFile()
-                    if (cookieFile != null) {
+                    val cookieBuilder = jobCookieBuilders[jobId]
+                    if (cookieBuilder != null && youtubeCookiesFile() != null) {
                         log("Three successive PO-token retries failed; falling back to cookie-only authentication", lastPoError)
-                        val cookieRequest = freshCookieRequest(jobId) ?: throw lastPoError
+                        val cookieRequest = cookieBuilder.invoke()
                         jobStates[jobId] = "retrying"
                         writeProgress(dir, "retrying", readPercent(dir).toDouble(), null, "Retrying with imported YouTube cookies…")
                         YoutubeDL.getInstance().execute(cookieRequest, jobId) { progress, eta, line ->
@@ -171,27 +171,17 @@ if 'private fun isYoutubeAuthFailure(error: Throwable): Boolean' not in text:
         return false
     }
 
-    private fun freshCookieRequest(jobId: String): YoutubeDLRequest? {
-        val builder = jobBuilders[jobId] ?: return null
-        val request = builder.invoke()
-        val cookies = youtubeCookiesFile() ?: return null
-        request.addOption("--cookies", cookies.absolutePath)
-        request.addOption("--extractor-args", "youtube:player-client=mweb")
-        log("Cookie-only fallback request prepared; no PO token is attached")
-        return request
-    }
+    private fun freshCookieRequest(jobId: String): YoutubeDLRequest? = jobCookieBuilders[jobId]?.invoke()
 
 '''
     if marker not in text: raise SystemExit("readPercent marker not found")
     text = text.replace(marker, helper + marker, 1)
 
-# Mark each job as YouTube and keep the builder closure for fresh token retries.
 start_pattern = re.compile(r'            val format = req\.optString\("format", ""\)\.trim\(\); val start = req\.optString\("start", ""\)\.trim\(\); val end = req\.optString\("end", ""\)\.trim\(\); val audioOnly = req\.optBoolean\("audio_only", false\); val audioFormat = req\.optString\("audio_format", ""\)\.trim\(\)\.lowercase\(Locale\.US\); val audioQuality = req\.optString\("audio_quality", ""\)\.trim\(\); val container = req\.optString\("merge_output_format", ""\)\.trim\(\); jobs\[jobId\] = dir; jobStates\[jobId\] = "running"; val youtube = isYoutubeUrl\(url\); jobRequests\[jobId\] = buildRequest\(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = !youtube\); if \(youtube && youtubeCookiesFile\(\) != null\) jobCookieRequests\[jobId\] = buildRequest\(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = true\);', re.S)
-start_replacement = '''            val format = req.optString("format", "").trim(); val start = req.optString("start", "").trim(); val end = req.optString("end", "").trim(); val audioOnly = req.optBoolean("audio_only", false); val audioFormat = req.optString("audio_format", "").trim().lowercase(Locale.US); val audioQuality = req.optString("audio_quality", "").trim(); val container = req.optString("merge_output_format", "").trim(); jobs[jobId] = dir; jobStates[jobId] = "running"; val youtube = isYoutubeUrl(url); jobYoutube[jobId] = youtube; jobBuilders[jobId] = { buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = false) }; jobRequests[jobId] = jobBuilders[jobId]!!.invoke(); if (youtube && youtubeCookiesFile() != null) jobCookieRequests[jobId] = buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = true, includePoToken = false);'''
+start_replacement = '''            val format = req.optString("format", "").trim(); val start = req.optString("start", "").trim(); val end = req.optString("end", "").trim(); val audioOnly = req.optBoolean("audio_only", false); val audioFormat = req.optString("audio_format", "").trim().lowercase(Locale.US); val audioQuality = req.optString("audio_quality", "").trim(); val container = req.optString("merge_output_format", "").trim(); jobs[jobId] = dir; jobStates[jobId] = "running"; val youtube = isYoutubeUrl(url); jobYoutube[jobId] = youtube; jobBuilders[jobId] = { buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = false, includePoToken = true) }; jobRequests[jobId] = jobBuilders[jobId]!!.invoke(); if (youtube && youtubeCookiesFile() != null) { jobCookieBuilders[jobId] = { buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = true, includePoToken = false) }; jobCookieRequests[jobId] = jobCookieBuilders[jobId]!!.invoke() };'''
 if not start_pattern.search(text): raise SystemExit("startDownload request construction not found")
 text = start_pattern.sub(start_replacement, text, count=1)
 
-text = text.replace('jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobStates.remove(jobId)', 'jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobYoutube.remove(jobId); jobStates.remove(jobId)', 1)
-
+text = text.replace('jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobYoutube.remove(jobId); jobStates.remove(jobId)', 'jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobYoutube.remove(jobId); jobCookieBuilders.remove(jobId); jobStates.remove(jobId)', 1)
 SERVER.write_text(text, encoding="utf-8")
-print("Applied source-aligned PO-token refresh, cookie fallback, selected-folder handling")
+print("Applied source-aligned PO-token refresh, cookie fallback, and selected-folder handling")
