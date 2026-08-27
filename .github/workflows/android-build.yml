@@ -7,6 +7,7 @@ on:
       - fix-control-bridge
       - material-you
       - v0.3-notifications
+      - po-token-hardening
   workflow_dispatch:
 
 permissions:
@@ -50,6 +51,9 @@ jobs:
         run: |
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/media-downloader-release.jks"
           test -s "$RUNNER_TEMP/media-downloader-release.jks"
+
+      - name: Apply source-aligned hardening
+        run: python3 scripts/apply-po-token-fix.py
 
       - name: Build Release APK
         run: gradle assembleRelease --stacktrace
