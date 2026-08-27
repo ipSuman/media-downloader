@@ -6,24 +6,16 @@ SERVER = ROOT / "app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer
 
 text = SERVER.read_text(encoding="utf-8")
 
-# Shared preferences are read directly by the native engine so the selected
-# SAF tree remains effective for foreground and background jobs.
 if 'private val preferences = context.getSharedPreferences("media_downloader", Context.MODE_PRIVATE)' not in text:
     marker = '    private val executor = Executors.newCachedThreadPool()\n'
-    if marker not in text:
-        raise SystemExit("engine field insertion point not found")
+    if marker not in text: raise SystemExit("engine field insertion point not found")
     text = text.replace(marker, marker + '    private val preferences = context.getSharedPreferences("media_downloader", Context.MODE_PRIVATE)\n', 1)
 
-# Rebuild requests after PO-token invalidation without reconstructing the job
-# state manually in each retry.
 if 'private val jobBuilders = ConcurrentHashMap<String, () -> YoutubeDLRequest>()' not in text:
     marker = '    private val jobCookieRequests = ConcurrentHashMap<String, YoutubeDLRequest>()\n'
-    if marker not in text:
-        raise SystemExit("job request insertion point not found")
-    text = text.replace(marker, marker + '    private val jobBuilders = ConcurrentHashMap<String, () -> YoutubeDLRequest>()\n', 1)
+    if marker not in text: raise SystemExit("job request insertion point not found")
+    text = text.replace(marker, marker + '    private val jobBuilders = ConcurrentHashMap<String, () -> YoutubeDLRequest>()\n    private val jobYoutube = ConcurrentHashMap<String, Boolean>()\n', 1)
 
-# Explicitly bind web-generated PO tokens to the web client and the matching
-# visitor_data.  A cookie-only request is kept separate for the final fallback.
 old_auth = '''    private fun addAuthenticationOptions(request: YoutubeDLRequest) {
         val cookies = youtubeCookiesFile()
         if (cookies != null) { request.addOption("--cookies", cookies.absolutePath); log("Using imported YouTube cookies for yt-dlp authentication") }
@@ -67,26 +59,18 @@ new_auth = '''    private fun addAuthenticationOptions(request: YoutubeDLRequest
         }
     }
 '''
-if old_auth not in text:
-    raise SystemExit("authentication block not found")
+if old_auth not in text: raise SystemExit("authentication block not found")
 text = text.replace(old_auth, new_auth, 1)
 
-# buildRequest gets an explicit switch so the final cookie fallback cannot carry
-# a stale PO token.
 old_sig = 'private fun buildRequest(jobId: String, url: String, format: String, start: String, end: String, audioOnly: Boolean, audioFormat: String, audioQuality: String, container: String, useCookies: Boolean = true): YoutubeDLRequest {'
 new_sig = 'private fun buildRequest(jobId: String, url: String, format: String, start: String, end: String, audioOnly: Boolean, audioFormat: String, audioQuality: String, container: String, useCookies: Boolean = true, includePoToken: Boolean = true): YoutubeDLRequest {'
-if old_sig not in text:
-    raise SystemExit("buildRequest signature not found")
+if old_sig not in text: raise SystemExit("buildRequest signature not found")
 text = text.replace(old_sig, new_sig, 1)
-old_auth_line = '            if (useCookies) addAuthenticationOptions(this) else addYoutubePoToken(this)\n'
-new_auth_line = '            if (useCookies) { if (includePoToken) addAuthenticationOptions(this) else { youtubeCookiesFile()?.let { addOption("--cookies", it.absolutePath) } } } else addYoutubePoToken(this)\n'
-if old_auth_line not in text:
-    raise SystemExit("buildRequest auth line not found")
-text = text.replace(old_auth_line, new_auth_line, 1)
+old_line = '            if (useCookies) addAuthenticationOptions(this) else addYoutubePoToken(this)\n'
+new_line = '            if (useCookies) { if (includePoToken) addAuthenticationOptions(this) else { youtubeCookiesFile()?.let { addOption("--cookies", it.absolutePath) } } } else addYoutubePoToken(this)\n'
+if old_line not in text: raise SystemExit("buildRequest auth line not found")
+text = text.replace(old_line, new_line, 1)
 
-# Selected SAF destination is resolved at completion time from the same
-# SharedPreferences key used by MainActivity. This avoids changing the
-# already-working WebView folder UI/bridge.
 save_pattern = re.compile(r'    private fun saveToDownloads\(source: File, name: String\): Pair<String, String> \{.*?\n    \}\n    private fun writeStatus', re.S)
 save_replacement = '''    private fun saveToDownloads(source: File, name: String): Pair<String, String> {
         val safe = name.replace(Regex("[\\\\/:*?\\\"<>|]"), "_")
@@ -106,39 +90,25 @@ save_replacement = '''    private fun saveToDownloads(source: File, name: String
                         ?: throw IllegalStateException("Could not open selected-folder output")
                     log("Saved completed download to selected folder: ${target.uri}")
                     return safe to target.uri.toString()
-                } catch (e: Exception) {
-                    target.delete()
-                    throw e
-                }
+                } catch (e: Exception) { target.delete(); throw e }
             }
             log("Selected download folder is unavailable; falling back to Downloads")
         }
         val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, safe)
-            put(MediaStore.Downloads.MIME_TYPE, mime)
-            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-            put(MediaStore.Downloads.IS_PENDING, 1)
+            put(MediaStore.Downloads.DISPLAY_NAME, safe); put(MediaStore.Downloads.MIME_TYPE, mime)
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS); put(MediaStore.Downloads.IS_PENDING, 1)
         }
-        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: throw IllegalStateException("Could not create Downloads entry")
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("Could not create Downloads entry")
         try {
-            resolver.openOutputStream(uri)?.use { out -> source.inputStream().use { it.copyTo(out) } }
-                ?: throw IllegalStateException("Could not open Downloads output")
-            values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
+            resolver.openOutputStream(uri)?.use { out -> source.inputStream().use { it.copyTo(out) } } ?: throw IllegalStateException("Could not open Downloads output")
+            values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0); resolver.update(uri, values, null, null)
             return safe to uri.toString()
-        } catch (e: Exception) {
-            resolver.delete(uri, null, null)
-            throw e
-        }
+        } catch (e: Exception) { resolver.delete(uri, null, null); throw e }
     }
     private fun writeStatus'''
-if not save_pattern.search(text):
-    raise SystemExit("saveToDownloads implementation not found")
+if not save_pattern.search(text): raise SystemExit("saveToDownloads implementation not found")
 text = save_pattern.sub(save_replacement, text, count=1)
 
-# Replace the old one-shot cookie retry with 3 fresh PO-token attempts followed
-# by a cookie-only retry. This block is deliberately expression-safe Kotlin.
 run_pattern = re.compile(r'            try \{ YoutubeDL\.getInstance\(\)\.execute\(request, jobId\) \{ progress, eta, line -> val state = jobStates\[jobId\] \?: "running"; writeProgress\(dir, state, progress\.toDouble\(\), eta, line\) \} \}\n            catch \(firstError: Exception\) \{.*?\n            \}\n            when \(jobStates\[jobId\]\)', re.S)
 run_replacement = '''            try {
                 YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
@@ -146,7 +116,7 @@ run_replacement = '''            try {
                     writeProgress(dir, state, progress.toDouble(), eta, line)
                 }
             } catch (firstError: Exception) {
-                if (!isYoutubeUrl(request.url) || !isYoutubeAuthFailure(firstError)) throw firstError
+                if (jobYoutube[jobId] != true || !isYoutubeAuthFailure(firstError)) throw firstError
                 var poRetrySucceeded = false
                 var lastPoError: Exception = firstError
                 for (attempt in 1..3) {
@@ -173,12 +143,7 @@ run_replacement = '''            try {
                     val cookieFile = youtubeCookiesFile()
                     if (cookieFile != null) {
                         log("Three successive PO-token retries failed; falling back to cookie-only authentication", lastPoError)
-                        val cookieBuilder = jobBuilders[jobId]
-                            ?: throw lastPoError
-                        val cookieRequest = cookieBuilder.invoke().also {
-                            it.addOption("--cookies", cookieFile.absolutePath)
-                            log("Cookie-only fallback request prepared; failed PO token is not attached")
-                        }
+                        val cookieRequest = freshCookieRequest(jobId) ?: throw lastPoError
                         jobStates[jobId] = "retrying"
                         writeProgress(dir, "retrying", readPercent(dir).toDouble(), null, "Retrying with imported YouTube cookies…")
                         YoutubeDL.getInstance().execute(cookieRequest, jobId) { progress, eta, line ->
@@ -186,17 +151,13 @@ run_replacement = '''            try {
                             writeProgress(dir, state, progress.toDouble(), eta, line)
                         }
                         log("Cookie-only fallback succeeded")
-                    } else {
-                        throw lastPoError
-                    }
+                    } else throw lastPoError
                 }
             }
             when (jobStates[jobId])'''
-if not run_pattern.search(text):
-    raise SystemExit("download execution block not found")
+if not run_pattern.search(text): raise SystemExit("download execution block not found")
 text = run_pattern.sub(run_replacement, text, count=1)
 
-# Helper used above to restrict refreshes to YouTube bot/auth failures.
 if 'private fun isYoutubeAuthFailure(error: Throwable): Boolean' not in text:
     marker = '    private fun readPercent(dir: File): Int = '
     helper = '''    private fun isYoutubeAuthFailure(error: Throwable): Boolean {
@@ -210,20 +171,27 @@ if 'private fun isYoutubeAuthFailure(error: Throwable): Boolean' not in text:
         return false
     }
 
+    private fun freshCookieRequest(jobId: String): YoutubeDLRequest? {
+        val builder = jobBuilders[jobId] ?: return null
+        val request = builder.invoke()
+        val cookies = youtubeCookiesFile() ?: return null
+        request.addOption("--cookies", cookies.absolutePath)
+        request.addOption("--extractor-args", "youtube:player-client=mweb")
+        log("Cookie-only fallback request prepared; no PO token is attached")
+        return request
+    }
+
 '''
-    if marker not in text:
-        raise SystemExit("readPercent marker not found")
+    if marker not in text: raise SystemExit("readPercent marker not found")
     text = text.replace(marker, helper + marker, 1)
 
-# Store a request factory and a cookie-free initial request for each job.
+# Mark each job as YouTube and keep the builder closure for fresh token retries.
 start_pattern = re.compile(r'            val format = req\.optString\("format", ""\)\.trim\(\); val start = req\.optString\("start", ""\)\.trim\(\); val end = req\.optString\("end", ""\)\.trim\(\); val audioOnly = req\.optBoolean\("audio_only", false\); val audioFormat = req\.optString\("audio_format", ""\)\.trim\(\)\.lowercase\(Locale\.US\); val audioQuality = req\.optString\("audio_quality", ""\)\.trim\(\); val container = req\.optString\("merge_output_format", ""\)\.trim\(\); jobs\[jobId\] = dir; jobStates\[jobId\] = "running"; val youtube = isYoutubeUrl\(url\); jobRequests\[jobId\] = buildRequest\(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = !youtube\); if \(youtube && youtubeCookiesFile\(\) != null\) jobCookieRequests\[jobId\] = buildRequest\(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = true\);', re.S)
-start_replacement = '''            val format = req.optString("format", "").trim(); val start = req.optString("start", "").trim(); val end = req.optString("end", "").trim(); val audioOnly = req.optBoolean("audio_only", false); val audioFormat = req.optString("audio_format", "").trim().lowercase(Locale.US); val audioQuality = req.optString("audio_quality", "").trim(); val container = req.optString("merge_output_format", "").trim(); jobs[jobId] = dir; jobStates[jobId] = "running"; val youtube = isYoutubeUrl(url); jobBuilders[jobId] = { buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = false) }; jobRequests[jobId] = jobBuilders[jobId]!!.invoke(); if (youtube && youtubeCookiesFile() != null) jobCookieRequests[jobId] = buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = true, includePoToken = false);'''
-if not start_pattern.search(text):
-    raise SystemExit("startDownload request construction not found")
+start_replacement = '''            val format = req.optString("format", "").trim(); val start = req.optString("start", "").trim(); val end = req.optString("end", "").trim(); val audioOnly = req.optBoolean("audio_only", false); val audioFormat = req.optString("audio_format", "").trim().lowercase(Locale.US); val audioQuality = req.optString("audio_quality", "").trim(); val container = req.optString("merge_output_format", "").trim(); jobs[jobId] = dir; jobStates[jobId] = "running"; val youtube = isYoutubeUrl(url); jobYoutube[jobId] = youtube; jobBuilders[jobId] = { buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = false) }; jobRequests[jobId] = jobBuilders[jobId]!!.invoke(); if (youtube && youtubeCookiesFile() != null) jobCookieRequests[jobId] = buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = true, includePoToken = false);'''
+if not start_pattern.search(text): raise SystemExit("startDownload request construction not found")
 text = start_pattern.sub(start_replacement, text, count=1)
 
-# Cleanup builder state with the job.
-text = text.replace('jobCookieRequests.remove(jobId); jobStates.remove(jobId)', 'jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobStates.remove(jobId)', 1)
+text = text.replace('jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobStates.remove(jobId)', 'jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobYoutube.remove(jobId); jobStates.remove(jobId)', 1)
 
 SERVER.write_text(text, encoding="utf-8")
-print("Applied source-aligned YouTube PO-token, retry, selected-folder hardening")
+print("Applied source-aligned PO-token refresh, cookie fallback, selected-folder handling")
