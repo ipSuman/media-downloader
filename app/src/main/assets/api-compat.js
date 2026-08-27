@@ -1,7 +1,7 @@
 /*
  * Android API compatibility bridge.
- * Also records the analyzed best audio-only format and binds it to a
- * user-selected video format before the native /download request is sent.
+ * Records the analyzed best audio-only format and binds it to a selected
+ * numeric video format before the native /download request is sent.
  */
 (function(){
   if (window.__mdApiCompatInstalled) return;
@@ -34,7 +34,11 @@
       const vcodec = String(f?.vcodec ?? "none").toLowerCase();
       return id && acodec !== "none" && acodec !== "" && (vcodec === "none" || vcodec === "" || vcodec === "unknown");
     });
-    candidates.sort((a,b) => Number(b.abr ?? b.tbr ?? 0) - Number(a.abr ?? a.tbr ?? 0));
+    candidates.sort((a,b) => {
+      const abrA = Number(a?.abr ?? -1), abrB = Number(b?.abr ?? -1);
+      if (abrB !== abrA) return abrB - abrA;
+      return Number(b?.tbr ?? 0) - Number(a?.tbr ?? 0);
+    });
     return candidates.length ? String(candidates[0].format_id) : "";
   }
 
@@ -48,17 +52,18 @@
         const raw = typeof init?.body === "string" ? init.body : "";
         if (raw) {
           const payload = JSON.parse(raw);
-          if (!payload.audio_only && /^\d+$/.test(String(payload.format || ""))) {
-            const audioId = bestAudioByUrl.get(String(payload.url || ""));
-            if (audioId) {
-              payload.format = `${payload.format}+${audioId}`;
-              console.log("Media Downloader: bound selected video to analyzed best audio", { videoId: payload.format.split("+")[0], audioId });
-            } else {
-              console.warn("Media Downloader: best audio ID unavailable for selected video; download not rewritten", payload.url);
+          if (!payload.audio_only) {
+            const rawFormat = String(payload.format || "");
+            const parts = rawFormat.split("+");
+            if (/^\d+$/.test(parts[0])) {
+              const audioId = bestAudioByUrl.get(String(payload.url || "")) || String(window.__mdBestAudioId || "");
+              if (audioId) {
+                payload.format = `${parts[0]}+${audioId}`;
+                console.log("Media Downloader: bound selected video to analyzed best audio", { videoId: parts[0], audioId });
+              } else {
+                console.warn("Media Downloader: best audio ID unavailable for selected video", payload.url);
+              }
             }
-          }
-          if (window.Android && typeof window.Android.getDownloadFolderName === "function") {
-            payload.destination_hint = String(window.Android.getDownloadFolderName() || "");
           }
           requestInit = Object.assign({}, init, { body: JSON.stringify(payload) });
         }
@@ -74,7 +79,7 @@
         if (audioId) {
           const key = String(data.webpage_url || data.url || "");
           if (key) bestAudioByUrl.set(key, audioId);
-          if (data.id) window.__mdBestAudioId = audioId;
+          window.__mdBestAudioId = audioId;
           console.log("Media Downloader: analyzed best audio ID", { audioId, url: key });
         }
       } catch (error) { console.warn("Media Downloader: could not record best audio ID", error); }
