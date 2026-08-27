@@ -22,12 +22,16 @@ import java.util.concurrent.TimeUnit
 
 @SuppressLint("SetJavaScriptEnabled")
 class YoutubePoTokenProvider(private val context: Context) {
+    data class PoTokenResult(val poToken: String, val visitorData: String?, val createdAt: Long = System.currentTimeMillis())
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var webView: WebView? = null
     @Volatile private var initialized = false
     @Volatile private var initializing = false
     @Volatile private var lastError: String? = null
     @Volatile private var lastVisitorData: String? = null
+    @Volatile private var cachedResult: PoTokenResult? = null
+    @Volatile private var tokenTimestamp: Long = 0L
     private val initLatch = CountDownLatch(1)
     private val tokenLatchLock = Any()
     private val tokenResults = HashMap<String, String>()
@@ -43,6 +47,7 @@ class YoutubePoTokenProvider(private val context: Context) {
         private const val WEB_CLIENT_VERSION = "2.20260708.00.00"
         private const val WEB_CLIENT_NAME = "WEB"
         private const val WEB_CLIENT_ID = "1"
+        private const val TOKEN_TTL_MS = 6 * 60 * 60 * 1000L
     }
 
     init { mainHandler.post { startInitialization() } }
@@ -260,6 +265,16 @@ class YoutubePoTokenProvider(private val context: Context) {
     }
 
     fun getMwebGvsToken(timeoutSeconds: Long = 25): String? {
+        val cached = cachedResult
+        if (cached != null && System.currentTimeMillis() - tokenTimestamp < TOKEN_TTL_MS) {
+            lastVisitorData = cached.visitorData
+            lastError = "mweb GVS PO Token cache hit"
+            return cached.poToken
+        }
+        return generateFreshToken(timeoutSeconds)?.poToken
+    }
+
+    private fun generateFreshToken(timeoutSeconds: Long): PoTokenResult? {
         if (!initialized) {
             if (!initLatch.await(timeoutSeconds, TimeUnit.SECONDS) || !initialized) {
                 lastError = lastError ?: "Android BotGuard provider initialization timed out"
@@ -290,17 +305,52 @@ class YoutubePoTokenProvider(private val context: Context) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
         while (System.nanoTime() < deadline) {
             synchronized(tokenLatchLock) {
-                tokenResults[visitorData]?.let { lastError = "mweb GVS PO Token generated successfully"; return it }
+                tokenResults[visitorData]?.let {
+                    val result = PoTokenResult(it, visitorData)
+                    cachedResult = result
+                    tokenTimestamp = System.currentTimeMillis()
+                    lastVisitorData = visitorData
+                    lastError = "mweb GVS PO Token generated successfully"
+                    return result
+                }
                 tokenErrors[visitorData]?.let { lastError = "PO-token generation failed: $it"; return null }
             }
             Thread.sleep(50)
         }
-        lastError = lastError ?: "PO-token generation timed out"
+        lastError = "PO-token generation timed out"
         return null
     }
 
-    /** VisitorData to pass to yt-dlp's youtube:visitor_data extractor argument. */
-    fun visitorData(): String? = lastVisitorData
+    /** Clear the cached token/visitor pair and force a fresh WebView/BotGuard session. */
+    fun invalidateToken() {
+        cachedResult = null
+        tokenTimestamp = 0L
+        lastVisitorData = null
+        synchronized(tokenLatchLock) {
+            tokenResults.clear()
+            tokenErrors.clear()
+        }
+        mainHandler.post {
+            try { webView?.stopLoading(); webView?.destroy() } catch (_: Exception) {}
+            webView = null
+            initialized = false
+            initializing = false
+            webPoSignalReady = false
+            integrityTokenReady = false
+            lastError = "PO-token cache invalidated; starting fresh WebView authentication"
+            startInitialization()
+        }
+    }
+
+    /** Force a fresh pair without waiting for the six-hour cache TTL. */
+    fun refreshToken(timeoutSeconds: Long = 25): PoTokenResult? {
+        invalidateToken()
+        Thread.sleep(100)
+        return generateFreshToken(timeoutSeconds)
+    }
+
+    /** VisitorData paired with the most recently generated/cached PO token. */
+    fun visitorData(): String? = cachedResult?.visitorData ?: lastVisitorData
 
     @JavascriptInterface
     fun onObtainPoTokenResult(identifier: String, poTokenU8: String) {
