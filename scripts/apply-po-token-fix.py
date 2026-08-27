@@ -1,64 +1,229 @@
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVER = ROOT / 'app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt'
-PROVIDER = ROOT / 'app/src/main/java/com/ipsuman/mediadownloader/YoutubePoTokenProvider.kt'
+SERVER = ROOT / "app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt"
 
-text = SERVER.read_text()
-changed = False
+text = SERVER.read_text(encoding="utf-8")
 
-field_marker = '    private val preferences = context.getSharedPreferences("media_downloader", Context.MODE_PRIVATE)\n'
-if 'private val poTokenProvider = YoutubePoTokenProvider(context)' not in text:
-    if field_marker not in text:
-        raise SystemExit('PO-token field insertion point not found')
-    text = text.replace(field_marker, field_marker + '    private val poTokenProvider = YoutubePoTokenProvider(context)\n', 1)
-    changed = True
+# Shared preferences are read directly by the native engine so the selected
+# SAF tree remains effective for foreground and background jobs.
+if 'private val preferences = context.getSharedPreferences("media_downloader", Context.MODE_PRIVATE)' not in text:
+    marker = '    private val executor = Executors.newCachedThreadPool()\n'
+    if marker not in text:
+        raise SystemExit("engine field insertion point not found")
+    text = text.replace(marker, marker + '    private val preferences = context.getSharedPreferences("media_downloader", Context.MODE_PRIVATE)\n', 1)
 
-helper_marker = '    private fun cors(r: Response): Response {\n'
-helper = '''    private fun addYoutubePoToken(request: YoutubeDLRequest) {\n        try {\n            val token = poTokenProvider.getMwebGvsToken()\n            if (!token.isNullOrBlank()) {\n                request.addOption(\n                    "--extractor-args",\n                    "youtube:player-client=default,mweb;po_token=mweb.gvs+$token"\n                )\n                request.addOption("--extractor-args", "youtube:pot_trace=true")\n                log("Generated and attached mweb GVS PO Token for YouTube")\n            } else {\n                log("PO Token provider unavailable; continuing without PO Token: ${poTokenProvider.lastError() ?: "unknown"}")\n            }\n        } catch (e: Exception) {\n            log("PO Token generation failed; continuing without PO Token", e)\n        }\n    }\n\n'''
-if 'private fun addYoutubePoToken(request: YoutubeDLRequest)' not in text:
-    if helper_marker not in text:
-        raise SystemExit('PO-token helper insertion point not found')
-    text = text.replace(helper_marker, helper + helper_marker, 1)
-    changed = True
+# Rebuild requests after PO-token invalidation without reconstructing the job
+# state manually in each retry.
+if 'private val jobBuilders = ConcurrentHashMap<String, () -> YoutubeDLRequest>()' not in text:
+    marker = '    private val jobCookieRequests = ConcurrentHashMap<String, YoutubeDLRequest>()\n'
+    if marker not in text:
+        raise SystemExit("job request insertion point not found")
+    text = text.replace(marker, marker + '    private val jobBuilders = ConcurrentHashMap<String, () -> YoutubeDLRequest>()\n', 1)
 
-old_auth = '''    private fun addAuthenticationOptions(request: YoutubeDLRequest) {\n        val cookies = youtubeCookiesFile()\n        if (cookies != null) {\n            request.addOption("--cookies", cookies.absolutePath)\n            log("Using imported YouTube cookies for yt-dlp authentication")\n        }\n    }\n'''
-new_auth = '''    private fun addAuthenticationOptions(request: YoutubeDLRequest) {\n        val cookies = youtubeCookiesFile()\n        if (cookies != null) {\n            request.addOption("--cookies", cookies.absolutePath)\n            log("Using imported YouTube cookies for yt-dlp authentication")\n        }\n        addYoutubePoToken(request)\n    }\n'''
-if old_auth in text:
-    text = text.replace(old_auth, new_auth, 1)
-    changed = True
+# Explicitly bind web-generated PO tokens to the web client and the matching
+# visitor_data.  A cookie-only request is kept separate for the final fallback.
+old_auth = '''    private fun addAuthenticationOptions(request: YoutubeDLRequest) {
+        val cookies = youtubeCookiesFile()
+        if (cookies != null) { request.addOption("--cookies", cookies.absolutePath); log("Using imported YouTube cookies for yt-dlp authentication") }
+        addYoutubePoToken(request)
+    }
 
-old_build = '            if (useCookies) addAuthenticationOptions(this)\n            addOption("-o", File(dir, "%(title)s [%(id)s].%(ext)s").absolutePath)\n'
-new_build = '            if (useCookies) addAuthenticationOptions(this) else addYoutubePoToken(this)\n            addOption("-o", File(dir, "%(title)s [%(id)s].%(ext)s").absolutePath)\n'
-if old_build in text:
-    text = text.replace(old_build, new_build, 1)
-    changed = True
+    @Synchronized private fun addYoutubePoToken(request: YoutubeDLRequest) {
+        try {
+            val token = poTokenProvider.getMwebGvsToken()
+            val visitorData = poTokenProvider.visitorData()
+            if (!visitorData.isNullOrBlank()) { request.addOption("--extractor-args", "youtube:visitor_data=$visitorData"); log("Attached Innertube visitorData to YouTube request") }
+            if (!token.isNullOrBlank()) { request.addOption("--extractor-args", "youtube:player-client=mweb;visitor_data=$visitorData;po_token=mweb.gvs+$token"); request.addOption("--extractor-args", "youtube:pot_trace=true"); log("Generated and attached mweb GVS PO Token for YouTube") }
+            else log("PO Token provider unavailable; continuing without PO Token: ${poTokenProvider.lastError() ?: "unknown"}")
+        } catch (e: Exception) { log("PO Token generation failed; continuing without PO Token", e) }
+    }
+'''
+new_auth = '''    private fun addAuthenticationOptions(request: YoutubeDLRequest) {
+        val cookies = youtubeCookiesFile()
+        if (cookies != null) {
+            request.addOption("--cookies", cookies.absolutePath)
+            log("Using imported YouTube cookies for yt-dlp authentication")
+        }
+        addYoutubePoToken(request)
+    }
 
-old_part = '''                return YoutubeDLRequest(url).apply {\n                    if (cookies) addAuthenticationOptions(this)\n                    addOption("-o", output.absolutePath)\n'''
-new_part = '''                return YoutubeDLRequest(url).apply {\n                    if (cookies) addAuthenticationOptions(this) else addYoutubePoToken(this)\n                    addOption("-o", output.absolutePath)\n'''
-if old_part in text:
-    text = text.replace(old_part, new_part, 1)
-    changed = True
+    @Synchronized private fun addYoutubePoToken(request: YoutubeDLRequest, forceRefresh: Boolean = false) {
+        try {
+            val result = if (forceRefresh) poTokenProvider.refreshToken() else {
+                val token = poTokenProvider.getMwebGvsToken()
+                if (token.isNullOrBlank()) null else YoutubePoTokenProvider.PoTokenResult(token, poTokenProvider.visitorData())
+            }
+            if (result != null && result.poToken.isNotBlank() && !result.visitorData.isNullOrBlank()) {
+                request.addOption("--extractor-args", "youtube:player-client=mweb;visitor_data=${result.visitorData};po_token=mweb.gvs+${result.poToken}")
+                request.addOption("--extractor-args", "youtube:pot_trace=true")
+                log("Attached paired mweb PO Token + visitorData with explicit mweb client")
+            } else {
+                log("PO Token provider unavailable; continuing without PO Token: ${poTokenProvider.lastError() ?: "unknown"}")
+            }
+        } catch (e: Exception) {
+            log("PO Token generation failed; continuing without PO Token", e)
+        }
+    }
+'''
+if old_auth not in text:
+    raise SystemExit("authentication block not found")
+text = text.replace(old_auth, new_auth, 1)
 
-# apply-vp9-fix.py is intentionally re-run by CI and is not fully idempotent.
-# Collapse the duplicate assignments it can create before compiling.
-duplicated = '''            val videoCodec = req.optString("video_codec", "").trim()\n            val videoCodec = req.optString("video_codec", "").trim()\n'''
-single = '''            val videoCodec = req.optString("video_codec", "").trim()\n'''
-if duplicated in text:
-    text = text.replace(duplicated, single, 1)
-    changed = True
+# buildRequest gets an explicit switch so the final cookie fallback cannot carry
+# a stale PO token.
+old_sig = 'private fun buildRequest(jobId: String, url: String, format: String, start: String, end: String, audioOnly: Boolean, audioFormat: String, audioQuality: String, container: String, useCookies: Boolean = true): YoutubeDLRequest {'
+new_sig = 'private fun buildRequest(jobId: String, url: String, format: String, start: String, end: String, audioOnly: Boolean, audioFormat: String, audioQuality: String, container: String, useCookies: Boolean = true, includePoToken: Boolean = true): YoutubeDLRequest {'
+if old_sig not in text:
+    raise SystemExit("buildRequest signature not found")
+text = text.replace(old_sig, new_sig, 1)
+old_auth_line = '            if (useCookies) addAuthenticationOptions(this) else addYoutubePoToken(this)\n'
+new_auth_line = '            if (useCookies) { if (includePoToken) addAuthenticationOptions(this) else { youtubeCookiesFile()?.let { addOption("--cookies", it.absolutePath) } } } else addYoutubePoToken(this)\n'
+if old_auth_line not in text:
+    raise SystemExit("buildRequest auth line not found")
+text = text.replace(old_auth_line, new_auth_line, 1)
 
-duplicated_jobs = '''            jobVideoCodecs[jobId] = videoCodec\n            jobFormats[jobId] = format\n            jobUrls[jobId] = url\n            jobVideoCodecs[jobId] = videoCodec\n            jobFormats[jobId] = format\n            jobUrls[jobId] = url\n'''
-single_jobs = '''            jobVideoCodecs[jobId] = videoCodec\n            jobFormats[jobId] = format\n            jobUrls[jobId] = url\n'''
-if duplicated_jobs in text:
-    text = text.replace(duplicated_jobs, single_jobs, 1)
-    changed = True
+# Selected SAF destination is resolved at completion time from the same
+# SharedPreferences key used by MainActivity. This avoids changing the
+# already-working WebView folder UI/bridge.
+save_pattern = re.compile(r'    private fun saveToDownloads\(source: File, name: String\): Pair<String, String> \{.*?\n    \}\n    private fun writeStatus', re.S)
+save_replacement = '''    private fun saveToDownloads(source: File, name: String): Pair<String, String> {
+        val safe = name.replace(Regex("[\\\\/:*?\\\"<>|]"), "_")
+        val mime = when (safe.substringAfterLast('.', "").lowercase(Locale.US)) {
+            "mp4" -> "video/mp4"; "mkv" -> "video/x-matroska"; "webm" -> "video/webm"
+            "m4a" -> "audio/mp4"; "opus" -> "audio/ogg"; "mp3" -> "audio/mpeg"
+            "flac" -> "audio/flac"; else -> "application/octet-stream"
+        }
+        val resolver = context.contentResolver
+        val treeUri = preferences.getString("download_tree_uri", null)?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        if (treeUri != null) {
+            val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+            if (tree != null && tree.canWrite()) {
+                val target = tree.createFile(mime, safe) ?: throw IllegalStateException("Could not create file in selected download folder")
+                try {
+                    resolver.openOutputStream(target.uri)?.use { out -> source.inputStream().use { it.copyTo(out) } }
+                        ?: throw IllegalStateException("Could not open selected-folder output")
+                    log("Saved completed download to selected folder: ${target.uri}")
+                    return safe to target.uri.toString()
+                } catch (e: Exception) {
+                    target.delete()
+                    throw e
+                }
+            }
+            log("Selected download folder is unavailable; falling back to Downloads")
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, safe)
+            put(MediaStore.Downloads.MIME_TYPE, mime)
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IllegalStateException("Could not create Downloads entry")
+        try {
+            resolver.openOutputStream(uri)?.use { out -> source.inputStream().use { it.copyTo(out) } }
+                ?: throw IllegalStateException("Could not open Downloads output")
+            values.clear(); values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            return safe to uri.toString()
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            throw e
+        }
+    }
+    private fun writeStatus'''
+if not save_pattern.search(text):
+    raise SystemExit("saveToDownloads implementation not found")
+text = save_pattern.sub(save_replacement, text, count=1)
 
-if changed:
-    SERVER.write_text(text)
-    print('Applied/normalized YouTube PO-token integration')
-else:
-    print('YouTube PO-token integration already clean; nothing to change')
+# Replace the old one-shot cookie retry with 3 fresh PO-token attempts followed
+# by a cookie-only retry. This block is deliberately expression-safe Kotlin.
+run_pattern = re.compile(r'            try \{ YoutubeDL\.getInstance\(\)\.execute\(request, jobId\) \{ progress, eta, line -> val state = jobStates\[jobId\] \?: "running"; writeProgress\(dir, state, progress\.toDouble\(\), eta, line\) \} \}\n            catch \(firstError: Exception\) \{.*?\n            \}\n            when \(jobStates\[jobId\]\)', re.S)
+run_replacement = '''            try {
+                YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
+                    val state = jobStates[jobId] ?: "running"
+                    writeProgress(dir, state, progress.toDouble(), eta, line)
+                }
+            } catch (firstError: Exception) {
+                if (!isYoutubeUrl(request.url) || !isYoutubeAuthFailure(firstError)) throw firstError
+                var poRetrySucceeded = false
+                var lastPoError: Exception = firstError
+                for (attempt in 1..3) {
+                    if (jobStates[jobId] == "paused" || jobStates[jobId] == "cancelled") return
+                    try {
+                        log("YouTube PO-token authentication failure; invalidating token and refreshing WebView (attempt $attempt/3)", lastPoError)
+                        poTokenProvider.invalidateToken()
+                        val freshBuilder = jobBuilders[jobId] ?: throw IllegalStateException("Missing request builder for $jobId")
+                        val freshRequest = freshBuilder.invoke()
+                        writeProgress(dir, "retrying", readPercent(dir).toDouble(), null, "Refreshing YouTube authentication ($attempt/3)…")
+                        YoutubeDL.getInstance().execute(freshRequest, jobId) { progress, eta, line ->
+                            val state = jobStates[jobId] ?: "running"
+                            writeProgress(dir, state, progress.toDouble(), eta, line)
+                        }
+                        log("YouTube PO-token retry $attempt succeeded")
+                        poRetrySucceeded = true
+                        break
+                    } catch (retryError: Exception) {
+                        lastPoError = retryError
+                        log("YouTube PO-token retry $attempt failed", retryError)
+                    }
+                }
+                if (!poRetrySucceeded) {
+                    val cookieFile = youtubeCookiesFile()
+                    if (cookieFile != null) {
+                        log("Three successive PO-token retries failed; falling back to cookie-only authentication", lastPoError)
+                        val cookieBuilder = jobBuilders[jobId]
+                            ?: throw lastPoError
+                        val cookieRequest = cookieBuilder.invoke().also {
+                            it.addOption("--cookies", cookieFile.absolutePath)
+                            log("Cookie-only fallback request prepared; failed PO token is not attached")
+                        }
+                        jobStates[jobId] = "retrying"
+                        writeProgress(dir, "retrying", readPercent(dir).toDouble(), null, "Retrying with imported YouTube cookies…")
+                        YoutubeDL.getInstance().execute(cookieRequest, jobId) { progress, eta, line ->
+                            val state = jobStates[jobId] ?: "running"
+                            writeProgress(dir, state, progress.toDouble(), eta, line)
+                        }
+                        log("Cookie-only fallback succeeded")
+                    } else {
+                        throw lastPoError
+                    }
+                }
+            }
+            when (jobStates[jobId])'''
+if not run_pattern.search(text):
+    raise SystemExit("download execution block not found")
+text = run_pattern.sub(run_replacement, text, count=1)
 
-if not PROVIDER.exists():
-    raise SystemExit('YoutubePoTokenProvider.kt is missing')
+# Helper used above to restrict refreshes to YouTube bot/auth failures.
+if 'private fun isYoutubeAuthFailure(error: Throwable): Boolean' not in text:
+    marker = '    private fun readPercent(dir: File): Int = '
+    helper = '''    private fun isYoutubeAuthFailure(error: Throwable): Boolean {
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth++ < 5) {
+            val message = (current.message ?: "").lowercase(Locale.US)
+            if (listOf("403", "forbidden", "bot detection", "sign in to confirm", "po token", "potoken", "visitor_data").any { message.contains(it) }) return true
+            current = current.cause
+        }
+        return false
+    }
+
+'''
+    if marker not in text:
+        raise SystemExit("readPercent marker not found")
+    text = text.replace(marker, helper + marker, 1)
+
+# Store a request factory and a cookie-free initial request for each job.
+start_pattern = re.compile(r'            val format = req\.optString\("format", ""\)\.trim\(\); val start = req\.optString\("start", ""\)\.trim\(\); val end = req\.optString\("end", ""\)\.trim\(\); val audioOnly = req\.optBoolean\("audio_only", false\); val audioFormat = req\.optString\("audio_format", ""\)\.trim\(\)\.lowercase\(Locale\.US\); val audioQuality = req\.optString\("audio_quality", ""\)\.trim\(\); val container = req\.optString\("merge_output_format", ""\)\.trim\(\); jobs\[jobId\] = dir; jobStates\[jobId\] = "running"; val youtube = isYoutubeUrl\(url\); jobRequests\[jobId\] = buildRequest\(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = !youtube\); if \(youtube && youtubeCookiesFile\(\) != null\) jobCookieRequests\[jobId\] = buildRequest\(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = true\);', re.S)
+start_replacement = '''            val format = req.optString("format", "").trim(); val start = req.optString("start", "").trim(); val end = req.optString("end", "").trim(); val audioOnly = req.optBoolean("audio_only", false); val audioFormat = req.optString("audio_format", "").trim().lowercase(Locale.US); val audioQuality = req.optString("audio_quality", "").trim(); val container = req.optString("merge_output_format", "").trim(); jobs[jobId] = dir; jobStates[jobId] = "running"; val youtube = isYoutubeUrl(url); jobBuilders[jobId] = { buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = false) }; jobRequests[jobId] = jobBuilders[jobId]!!.invoke(); if (youtube && youtubeCookiesFile() != null) jobCookieRequests[jobId] = buildRequest(jobId, url, format, start, end, audioOnly, audioFormat, audioQuality, container, useCookies = true, includePoToken = false);'''
+if not start_pattern.search(text):
+    raise SystemExit("startDownload request construction not found")
+text = start_pattern.sub(start_replacement, text, count=1)
+
+# Cleanup builder state with the job.
+text = text.replace('jobCookieRequests.remove(jobId); jobStates.remove(jobId)', 'jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobStates.remove(jobId)', 1)
+
+SERVER.write_text(text, encoding="utf-8")
+print("Applied source-aligned YouTube PO-token, retry, selected-folder hardening")
