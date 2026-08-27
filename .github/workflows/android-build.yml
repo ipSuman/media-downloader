@@ -52,14 +52,11 @@ jobs:
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/media-downloader-release.jks"
           test -s "$RUNNER_TEMP/media-downloader-release.jks"
 
-      - name: Apply source-aligned hardening
-        run: python3 scripts/apply-po-token-fix.py
-
-      - name: Apply download/authentication hardening
-        run: python3 scripts/apply-download-hardening.py
-
-      - name: Enforce cookie-only final fallback
-        run: python3 scripts/apply-cookie-fallback-fix.py
+      - name: Verify committed Android sources
+        run: |
+          test -s app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt
+          test -s app/src/main/java/com/ipsuman/mediadownloader/YoutubePoTokenProvider.kt
+          echo "Using committed native Android sources; no source-rewriting patchers are run in CI."
 
       - name: Build Release APK
         run: gradle assembleRelease --stacktrace
