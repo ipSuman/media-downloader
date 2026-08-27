@@ -3,6 +3,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "app/src/main/java/com/ipsuman/mediadownloader/LocalEngineServer.kt"
+PROVIDER = ROOT / "app/src/main/java/com/ipsuman/mediadownloader/YoutubePoTokenProvider.kt"
 
 text = SERVER.read_text(encoding="utf-8")
 
@@ -51,12 +52,8 @@ new_auth = '''    private fun addAuthenticationOptions(request: YoutubeDLRequest
                 request.addOption("--extractor-args", "youtube:player-client=mweb;visitor_data=${result.visitorData};po_token=mweb.gvs+${result.poToken}")
                 request.addOption("--extractor-args", "youtube:pot_trace=true")
                 log("Attached paired mweb PO Token + visitorData with explicit mweb client")
-            } else {
-                log("PO Token provider unavailable; continuing without PO Token: ${poTokenProvider.lastError() ?: "unknown"}")
-            }
-        } catch (e: Exception) {
-            log("PO Token generation failed; continuing without PO Token", e)
-        }
+            } else log("PO Token provider unavailable; continuing without PO Token: ${poTokenProvider.lastError() ?: "unknown"}")
+        } catch (e: Exception) { log("PO Token generation failed; continuing without PO Token", e) }
     }
 '''
 if old_auth not in text: raise SystemExit("authentication block not found")
@@ -159,7 +156,9 @@ if not run_pattern.search(text): raise SystemExit("download execution block not 
 text = run_pattern.sub(run_replacement, text, count=1)
 
 if 'private fun isYoutubeAuthFailure(error: Throwable): Boolean' not in text:
-    marker = '    private fun readPercent(dir: File): Int = '
+    marker = '    private fun readPercent(dir: File) = '
+    if marker not in text:
+        marker = '    private fun readPercent(dir: File): Int = '
     helper = '''    private fun isYoutubeAuthFailure(error: Throwable): Boolean {
         var current: Throwable? = error
         var depth = 0
@@ -171,8 +170,6 @@ if 'private fun isYoutubeAuthFailure(error: Throwable): Boolean' not in text:
         return false
     }
 
-    private fun freshCookieRequest(jobId: String): YoutubeDLRequest? = jobCookieBuilders[jobId]?.invoke()
-
 '''
     if marker not in text: raise SystemExit("readPercent marker not found")
     text = text.replace(marker, helper + marker, 1)
@@ -182,6 +179,14 @@ start_replacement = '''            val format = req.optString("format", "").trim
 if not start_pattern.search(text): raise SystemExit("startDownload request construction not found")
 text = start_pattern.sub(start_replacement, text, count=1)
 
-text = text.replace('jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobYoutube.remove(jobId); jobStates.remove(jobId)', 'jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobYoutube.remove(jobId); jobCookieBuilders.remove(jobId); jobStates.remove(jobId)', 1)
+text = text.replace('jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobYoutube.remove(jobId); jobCookieBuilders.remove(jobId); jobStates.remove(jobId)', 'jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobYoutube.remove(jobId); jobCookieBuilders.remove(jobId); jobStates.remove(jobId)', 1)
 SERVER.write_text(text, encoding="utf-8")
-print("Applied source-aligned PO-token refresh, cookie fallback, and selected-folder handling")
+
+provider = PROVIDER.read_text(encoding="utf-8")
+provider = provider.replace('    private val initLatch = CountDownLatch(1)\n', '    @Volatile private var initLatch = CountDownLatch(1)\n', 1)
+needle = '    private fun startInitialization() {\n        if (initializing || initialized) return\n        initializing = true\n'
+replacement = '    private fun startInitialization() {\n        if (initializing || initialized) return\n        initLatch = CountDownLatch(1)\n        initializing = true\n'
+if needle not in provider: raise SystemExit("provider initialization marker not found")
+provider = provider.replace(needle, replacement, 1)
+PROVIDER.write_text(provider, encoding="utf-8")
+print("Applied source-aligned PO-token refresh, cookie fallback, selected-folder handling, and refreshable BotGuard latch")
