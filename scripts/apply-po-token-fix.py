@@ -70,7 +70,7 @@ text = text.replace(old_line, new_line, 1)
 
 save_pattern = re.compile(r'    private fun saveToDownloads\(source: File, name: String\): Pair<String, String> \{.*?\n    \}\n    private fun writeStatus', re.S)
 save_replacement = '''    private fun saveToDownloads(source: File, name: String): Pair<String, String> {
-        val safe = name.replace(Regex("[\\\\/:*?\\\"<>|]"), "_")
+        val safe = name.replace(Regex("""[\\\\/:*?\"<>|]"""), "_")
         val mime = when (safe.substringAfterLast('.', "").lowercase(Locale.US)) {
             "mp4" -> "video/mp4"; "mkv" -> "video/x-matroska"; "webm" -> "video/webm"
             "m4a" -> "audio/mp4"; "opus" -> "audio/ogg"; "mp3" -> "audio/mpeg"
@@ -179,7 +179,6 @@ start_replacement = '''            val format = req.optString("format", "").trim
 if not start_pattern.search(text): raise SystemExit("startDownload request construction not found")
 text = start_pattern.sub(start_replacement, text, count=1)
 
-text = text.replace('jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobYoutube.remove(jobId); jobCookieBuilders.remove(jobId); jobStates.remove(jobId)', 'jobCookieRequests.remove(jobId); jobBuilders.remove(jobId); jobYoutube.remove(jobId); jobCookieBuilders.remove(jobId); jobStates.remove(jobId)', 1)
 SERVER.write_text(text, encoding="utf-8")
 
 provider = PROVIDER.read_text(encoding="utf-8")
