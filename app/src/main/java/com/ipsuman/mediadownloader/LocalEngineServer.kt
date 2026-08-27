@@ -57,10 +57,13 @@ class LocalEngineServer(private val context: Context) : NanoHTTPD(8765) {
         if (!updateAttempted) {
             updateAttempted = true
             try {
-                log("Checking for latest stable yt-dlp binary")
-                val result = YoutubeDL.getInstance().updateYoutubeDL(context.applicationContext)
-                log("yt-dlp update result: $result")
-            } catch (e: Exception) { log("yt-dlp update check failed; keeping bundled binary", e) }
+                log("Checking for latest yt-dlp nightly binary")
+                val result = YoutubeDL.getInstance().updateYoutubeDL(
+                    context.applicationContext,
+                    YoutubeDL.UpdateChannel.NIGHTLY
+                )
+                log("yt-dlp nightly update result: $result")
+            } catch (e: Exception) { log("yt-dlp nightly update check failed; keeping bundled binary", e) }
         }
         val version = try { YoutubeDL.getInstance().version(context) ?: "bundled" } catch (_: Exception) { "bundled" }
         log("Android yt-dlp engine ready: $version")
